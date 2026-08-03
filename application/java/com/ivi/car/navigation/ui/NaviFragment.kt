@@ -57,12 +57,10 @@ import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
-import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.MapView
 import com.mapbox.maps.MapboxMap
 import com.mapbox.maps.Style
 import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor
-import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
@@ -419,13 +417,7 @@ class NaviFragment : Fragment() {
 
     private fun updateVehiclePuck() {
         binding.mapView.location.apply {
-            this.locationPuck = LocationPuck2D(
-                topImage = ImageHolder.from(R.drawable.ic_vehicle_puck),
-                bearingImage = ImageHolder.from(R.drawable.ic_vehicle_puck),
-                shadowImage = ImageHolder.Companion.from(
-                    com.mapbox.maps.R.drawable.mapbox_user_icon_shadow
-                )
-            )
+            locationPuck = createDefault2DPuck(true)
         }
     }
 
@@ -621,11 +613,7 @@ class NaviFragment : Fragment() {
             showAccuracyRing = true
             enabled = true
             puckBearing = PuckBearing.COURSE
-            locationPuck = createDefault2DPuck(true).apply {
-                topImage = ImageHolder.from(R.drawable.ic_vehicle_puck)
-                bearingImage = ImageHolder.from(R.drawable.ic_vehicle_puck)
-                shadowImage = ImageHolder.Companion.from(com.mapbox.maps.R.drawable.mapbox_user_icon_shadow)
-            }
+            locationPuck = createDefault2DPuck(true)
         }
         binding.mapView.logo.enabled = true
         binding.mapView.attribution.enabled = true
@@ -1381,12 +1369,10 @@ class NaviFragment : Fragment() {
         private val suggestionAnnotations = mutableMapOf<String, NavigationSuggestion>()
         private val mapboxMap: MapboxMap = mapView.getMapboxMap()
         private val pointAnnotationManager = mapView.annotations.createPointAnnotationManager(null)
-        private val pinBitmap = requireNotNull(
-            ContextCompat.getDrawable(context, R.drawable.ic_red_marker)
-        ) { "Missing map marker drawable" }.toBitmap()
         private val destinationBitmap = requireNotNull(
             ContextCompat.getDrawable(context, R.drawable.ic_destination_marker)
         ) { "Missing destination marker drawable" }.toBitmap()
+        private val pinBitmap = destinationBitmap
         private val categoryBitmaps = mapOf(
             NearbyCategory.RESTAURANT to markerBitmap(context, R.drawable.ic_marker_restaurant),
             NearbyCategory.HOTEL to markerBitmap(context, R.drawable.ic_marker_hotel),
