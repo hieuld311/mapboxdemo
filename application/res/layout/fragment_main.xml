@@ -559,13 +559,4 @@
         app:layout_constraintBottom_toTopOf="@id/routeOverview"
         app:layout_constraintEnd_toStartOf="@id/mapControls" />
 
-    <com.mapbox.search.ui.view.place.SearchPlaceBottomSheetView
-        android:id="@+id/search_place_view"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:elevation="8dp"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>

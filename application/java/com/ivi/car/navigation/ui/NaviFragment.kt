@@ -117,15 +117,6 @@ import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
 import com.mapbox.navigation.utils.internal.toPoint
-import com.mapbox.search.common.DistanceCalculator
-import com.mapbox.search.discover.DiscoverAddress
-import com.mapbox.search.discover.DiscoverResult
-import com.mapbox.search.result.SearchAddress
-import com.mapbox.search.result.SearchResultType
-import com.mapbox.search.ui.view.CommonSearchViewConfiguration
-import com.mapbox.search.ui.view.DistanceUnitType
-import com.mapbox.search.ui.view.place.SearchPlace
-import com.mapbox.search.ui.view.place.SearchPlaceBottomSheetView
 import dagger.hilt.android.AndroidEntryPoint
 import fauto.car.FAutoCar
 import fauto.car.sharedata.FAutoShareDataManager
@@ -136,7 +127,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
 import java.util.Locale
-import java.util.UUID
 import javax.inject.Inject
 import kotlin.math.roundToInt
 
@@ -510,9 +500,6 @@ class NaviFragment : Fragment() {
 
     private lateinit var mapMarkersManager: MapMarkersManager
 
-    private lateinit var searchPlaceView: SearchPlaceBottomSheetView
-    private var selectedSuggestionId: String? = null
-
     private lateinit var serviceInterface: ILocationUpdate
     private var isLocationConnected = false
     private var mockLocationBound = false
@@ -624,28 +611,6 @@ class NaviFragment : Fragment() {
         binding.mapView.scalebar.enabled = false
         binding.mapView.compass.enabled = false
 
-        searchPlaceView = binding.searchPlaceView.apply {
-            initialize(CommonSearchViewConfiguration(DistanceUnitType.METRIC))
-            isFavoriteButtonVisible = false
-            isShareButtonVisible = false
-            addOnCloseClickListener {
-                mapMarkersManager.adjustMarkersForClosedCard()
-                searchPlaceView.visibility = View.GONE
-                selectedSuggestionId = null
-            }
-            addOnNavigateClickListener {
-                val suggestionId = selectedSuggestionId
-                if (suggestionId != null) {
-                    naviViewModel.selectSuggestion(suggestionId)
-                } else {
-                    naviViewModel.findRoute(navigationLocationProvider.lastLocation, it.coordinate)
-                }
-                mapMarkersManager.adjustMarkersForClosedCard()
-                mapMarkersManager.clearMarkers()
-                searchPlaceView.visibility = View.GONE
-                selectedSuggestionId = null
-            }
-        }
     }
 
     private fun initAction() {
@@ -723,16 +688,6 @@ class NaviFragment : Fragment() {
             }
         }
 
-        mapMarkersManager.onResultClickListener = { result ->
-            Log.i("SearchApiExample", "onResultClickListener")
-            selectedSuggestionId = null
-            mapMarkersManager.adjustMarkersForOpenCard()
-            searchPlaceView.open(result.toSearchPlace())
-            navigationLocationProvider.userDistanceTo(result.coordinate) { distance ->
-                distance?.let { searchPlaceView.updateDistance(distance) }
-            }
-            searchPlaceView.visibility = View.VISIBLE
-        }
         mapMarkersManager.onSuggestionClickListener = { result ->
             showMainPlaceDetail(result)
         }
@@ -753,16 +708,6 @@ class NaviFragment : Fragment() {
         override fun onMoveEnd(detector: MoveGestureDetector) {
             // Remain in free-pan mode until the user explicitly taps recenter.
         }
-    }
-
-    private fun NavigationLocationProvider.userDistanceTo(
-        destination: Point, callback: (Double?) -> Unit
-    ) {
-        val distance = this.lastLocation?.let {
-            DistanceCalculator.instance(latitude = it.latitude)
-                .distance(it.toPoint(), destination)
-        }
-        callback(distance)
     }
 
     private fun initObserver() {
@@ -935,7 +880,6 @@ class NaviFragment : Fragment() {
         if (normalized.length < 2) return
         searchDebounceJob?.cancel()
         naviViewModel.clearSuggestionDetails()
-        searchPlaceView.visibility = View.GONE
         setActiveMainCategory(null)
         renderSearchPanel(SearchPanelMode.SUGGESTIONS)
         naviViewModel.searchDestinations(normalized)
@@ -945,7 +889,6 @@ class NaviFragment : Fragment() {
         searchDebounceJob?.cancel()
         hideKeyboard()
         binding.searchInput.clearFocus()
-        searchPlaceView.visibility = View.GONE
         setActiveMainCategory(category)
         renderSearchPanel(SearchPanelMode.SUGGESTIONS)
         naviViewModel.clearSuggestionDetails()
@@ -1008,7 +951,6 @@ class NaviFragment : Fragment() {
 
     private fun showMainPlaceDetail(suggestion: NavigationSuggestion) {
         mainSelectedSuggestionId = suggestion.suggestionId
-        searchPlaceView.visibility = View.GONE
         renderSearchPanel(SearchPanelMode.DETAIL)
         bindMainPlaceDetail(suggestion, "Loading Tripadvisor details...", resetPhoto = true)
         binding.mapView.mapboxMap.setCamera(
@@ -1355,7 +1297,6 @@ class NaviFragment : Fragment() {
         mockLocationUpdateJob?.cancel()
         searchDebounceJob?.cancel()
         photoLoadJob?.cancel()
-        mapMarkersManager.onResultClickListener = null
         mapMarkersManager.onSuggestionClickListener = null
         mapMarkersManager.clearMarkers()
 
@@ -1389,7 +1330,6 @@ class NaviFragment : Fragment() {
 
     private class MapMarkersManager(mapView: MapView, context: Context) {
 
-        private val annotations = mutableMapOf<String, DiscoverResult>()
         private val suggestionAnnotations = mutableMapOf<String, NavigationSuggestion>()
         private val mapboxMap: MapboxMap = mapView.getMapboxMap()
         private val pointAnnotationManager = mapView.annotations.createPointAnnotationManager(null)
@@ -1409,14 +1349,10 @@ class NaviFragment : Fragment() {
         )
         private var destinationPoint: Point? = null
 
-        var onResultClickListener: ((DiscoverResult) -> Unit)? = null
         var onSuggestionClickListener: ((NavigationSuggestion) -> Unit)? = null
 
         init {
             pointAnnotationManager.addClickListener {
-                annotations[it.id]?.let { result ->
-                    onResultClickListener?.invoke(result)
-                }
                 suggestionAnnotations[it.id]?.let { result ->
                     onSuggestionClickListener?.invoke(result)
                 }
@@ -1426,14 +1362,12 @@ class NaviFragment : Fragment() {
 
         fun clearMarkers() {
             pointAnnotationManager.deleteAll()
-            annotations.clear()
             suggestionAnnotations.clear()
             destinationPoint = null
         }
 
         fun adjustMarkersForOpenCard() {
-            val coordinates = annotations.values.map { it.coordinate } +
-                suggestionAnnotations.values.map { it.point }
+            val coordinates = suggestionAnnotations.values.map { it.point }
             if (coordinates.isEmpty()) return
             val cameraOptions = mapboxMap.cameraForCoordinates(
                 coordinates, MARKERS_INSETS_OPEN_CARD, bearing = null, pitch = null
@@ -1442,37 +1376,12 @@ class NaviFragment : Fragment() {
         }
 
         fun adjustMarkersForClosedCard() {
-            val coordinates = annotations.values.map { it.coordinate } +
-                suggestionAnnotations.values.map { it.point }
+            val coordinates = suggestionAnnotations.values.map { it.point }
             if (coordinates.isEmpty()) return
             val cameraOptions = mapboxMap.cameraForCoordinates(
                 coordinates, MARKERS_INSETS, bearing = null, pitch = null
             )
             mapboxMap.setCamera(cameraOptions)
-        }
-
-        fun showResults(results: List<DiscoverResult>) {
-            clearMarkers()
-            if (results.isEmpty()) {
-                return
-            }
-
-            val coordinates = ArrayList<Point>(results.size)
-            results.forEach { result ->
-                val options =
-                    PointAnnotationOptions().withPoint(result.coordinate).withIconImage(pinBitmap)
-                        .withIconAnchor(IconAnchor.BOTTOM)
-
-                val annotation = pointAnnotationManager.create(options)
-                annotations[annotation.id] = result
-                coordinates.add(result.coordinate)
-            }
-
-            mapboxMap.cameraForCoordinates(
-                coordinates, CameraOptions.Builder().build(), MARKERS_INSETS, null, null
-            ) {
-                mapboxMap.setCamera(it)
-            }
         }
 
         fun showSuggestions(results: List<NavigationSuggestion>) {
@@ -1533,64 +1442,5 @@ class NaviFragment : Fragment() {
             MARKERS_EDGE_OFFSET, MARKERS_EDGE_OFFSET, PLACE_CARD_HEIGHT, MARKERS_EDGE_OFFSET
         )
 
-        fun DiscoverAddress.toSearchAddress(): SearchAddress {
-            return SearchAddress(
-                houseNumber = houseNumber,
-                street = street,
-                neighborhood = neighborhood,
-                locality = locality,
-                postcode = postcode,
-                place = place,
-                district = district,
-                region = region,
-                country = country
-            )
-        }
-
-        fun DiscoverResult.toSearchPlace(): SearchPlace {
-            return SearchPlace(
-                id = name + UUID.randomUUID().toString(),
-                name = name,
-                descriptionText = null,
-                address = address.toSearchAddress(),
-                resultTypes = listOf(SearchResultType.POI),
-                record = null,
-                coordinate = coordinate,
-                routablePoints = routablePoints,
-                categories = categories,
-                makiIcon = makiIcon,
-                metadata = null,
-                distanceMeters = null,
-                feedback = null,
-            )
-        }
-
-        fun NavigationSuggestion.toSearchPlace(): SearchPlace {
-            return SearchPlace(
-                id = suggestionId,
-                name = name,
-                descriptionText = rating?.let { "Rating $it" },
-                address = SearchAddress(
-                    houseNumber = null,
-                    street = address,
-                    neighborhood = null,
-                    locality = null,
-                    postcode = null,
-                    place = null,
-                    district = null,
-                    region = null,
-                    country = null
-                ),
-                resultTypes = listOf(SearchResultType.POI),
-                record = null,
-                coordinate = point,
-                routablePoints = emptyList(),
-                categories = listOfNotNull(category?.name),
-                makiIcon = null,
-                metadata = null,
-                distanceMeters = distanceMeters,
-                feedback = null
-            )
-        }
     }
 }
