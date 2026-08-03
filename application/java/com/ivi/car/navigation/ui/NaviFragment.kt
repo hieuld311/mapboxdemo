@@ -145,6 +145,10 @@ import kotlin.math.roundToInt
 class NaviFragment : Fragment() {
     private val TAG = this.javaClass.name
 
+    private enum class SearchPanelMode { HIDDEN, SUGGESTIONS, DETAIL }
+
+    private enum class SavedPlace(val label: String) { HOME("Home"), WORK("Work") }
+
     private var _binding: FragmentMainBinding? = null
     private val binding: FragmentMainBinding
         get() = requireNotNull(_binding) { "Fragment view is not available" }
@@ -892,9 +896,7 @@ class NaviFragment : Fragment() {
                 searchDebounceJob?.cancel()
                 if (query.length >= 2) {
                     naviViewModel.clearSuggestionDetails()
-                    binding.mainSearchPanel.visibility = View.VISIBLE
-                    binding.mainSuggestionContent.visibility = View.VISIBLE
-                    binding.mainPlaceDetail.visibility = View.GONE
+                    renderSearchPanel(SearchPanelMode.SUGGESTIONS)
                     searchDebounceJob = viewLifecycleOwner.lifecycleScope.launch {
                         delay(1_000)
                         naviViewModel.searchDestinations(query)
@@ -924,8 +926,8 @@ class NaviFragment : Fragment() {
         binding.mainAddLabel.setOnClickListener {
             naviViewModel.selectedSuggestion.value?.let(::showLabelChooser)
         }
-        binding.navigateHomeShortcut.setOnClickListener { startSavedPlaceNavigation(isHome = true) }
-        binding.navigateWorkShortcut.setOnClickListener { startSavedPlaceNavigation(isHome = false) }
+        binding.navigateHomeShortcut.setOnClickListener { startSavedPlaceNavigation(SavedPlace.HOME) }
+        binding.navigateWorkShortcut.setOnClickListener { startSavedPlaceNavigation(SavedPlace.WORK) }
     }
 
     private fun searchNow(query: String) {
@@ -935,9 +937,7 @@ class NaviFragment : Fragment() {
         naviViewModel.clearSuggestionDetails()
         searchPlaceView.visibility = View.GONE
         setActiveMainCategory(null)
-        binding.mainSearchPanel.visibility = View.VISIBLE
-        binding.mainSuggestionContent.visibility = View.VISIBLE
-        binding.mainPlaceDetail.visibility = View.GONE
+        renderSearchPanel(SearchPanelMode.SUGGESTIONS)
         naviViewModel.searchDestinations(normalized)
     }
 
@@ -947,9 +947,7 @@ class NaviFragment : Fragment() {
         binding.searchInput.clearFocus()
         searchPlaceView.visibility = View.GONE
         setActiveMainCategory(category)
-        binding.mainSearchPanel.visibility = View.VISIBLE
-        binding.mainSuggestionContent.visibility = View.VISIBLE
-        binding.mainPlaceDetail.visibility = View.GONE
+        renderSearchPanel(SearchPanelMode.SUGGESTIONS)
         naviViewModel.clearSuggestionDetails()
         naviViewModel.searchNearby(category.code)
     }
@@ -989,18 +987,30 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private fun showMainPlaceDetail(suggestion: NavigationSuggestion) {
-        mainSelectedSuggestionId = suggestion.suggestionId
-        searchPlaceView.visibility = View.GONE
-        binding.mainSearchPanel.visibility = View.VISIBLE
-        binding.mainSuggestionContent.visibility = View.GONE
-        binding.mainPlaceDetail.visibility = View.VISIBLE
+    private fun renderSearchPanel(mode: SearchPanelMode) {
+        binding.mainSearchPanel.showIf(mode != SearchPanelMode.HIDDEN)
+        binding.mainSuggestionContent.showIf(mode == SearchPanelMode.SUGGESTIONS)
+        binding.mainPlaceDetail.showIf(mode == SearchPanelMode.DETAIL)
+    }
+
+    private fun bindMainPlaceDetail(
+        suggestion: NavigationSuggestion,
+        source: String,
+        resetPhoto: Boolean
+    ) {
         binding.mainDetailName.text = suggestion.name
         binding.mainDetailMeta.text = suggestion.detailSummaryText()
         binding.mainDetailAddress.text = suggestion.address?.takeIf { it.isNotBlank() }
             ?: "Address unavailable"
-        binding.mainDetailPhoto.visibility = View.GONE
-        binding.mainDetailSource.text = "Loading Tripadvisor details..."
+        binding.mainDetailSource.text = source
+        if (resetPhoto) binding.mainDetailPhoto.visibility = View.GONE
+    }
+
+    private fun showMainPlaceDetail(suggestion: NavigationSuggestion) {
+        mainSelectedSuggestionId = suggestion.suggestionId
+        searchPlaceView.visibility = View.GONE
+        renderSearchPanel(SearchPanelMode.DETAIL)
+        bindMainPlaceDetail(suggestion, "Loading Tripadvisor details...", resetPhoto = true)
         binding.mapView.mapboxMap.setCamera(
             CameraOptions.Builder().center(suggestion.point).zoom(15.0).build()
         )
@@ -1010,23 +1020,22 @@ class NaviFragment : Fragment() {
 
     private fun renderMainPlaceDetail(suggestion: NavigationSuggestion) {
         if (mainSelectedSuggestionId != suggestion.suggestionId) return
-        binding.mainDetailName.text = suggestion.name
-        binding.mainDetailMeta.text = suggestion.detailSummaryText()
-        binding.mainDetailAddress.text = suggestion.address?.takeIf { it.isNotBlank() }
-            ?: "Address unavailable"
-        binding.mainDetailSource.text = if (suggestion.rating != null || suggestion.photoUrl != null) {
-            "Rating and photo by Tripadvisor"
-        } else {
-            ""
-        }
+        bindMainPlaceDetail(
+            suggestion = suggestion,
+            source = if (suggestion.rating != null || suggestion.photoUrl != null) {
+                "Rating and photo by Tripadvisor"
+            } else {
+                ""
+            },
+            resetPhoto = false
+        )
         loadMainPlacePhoto(suggestion)
     }
 
     private fun showSuggestionList() {
         naviViewModel.clearSuggestionDetails()
         mainSelectedSuggestionId = null
-        binding.mainPlaceDetail.visibility = View.GONE
-        binding.mainSuggestionContent.visibility = View.VISIBLE
+        renderSearchPanel(SearchPanelMode.SUGGESTIONS)
         mapMarkersManager.adjustMarkersForClosedCard()
     }
 
@@ -1034,9 +1043,7 @@ class NaviFragment : Fragment() {
         searchDebounceJob?.cancel()
         photoLoadJob?.cancel()
         mainSelectedSuggestionId = null
-        binding.mainSearchPanel.visibility = View.GONE
-        binding.mainPlaceDetail.visibility = View.GONE
-        binding.mainSuggestionContent.visibility = View.VISIBLE
+        renderSearchPanel(SearchPanelMode.HIDDEN)
         binding.mainDetailPhoto.visibility = View.GONE
         naviViewModel.clearSuggestionDetails()
         if (clearResults) naviViewModel.clearSearch()
@@ -1046,51 +1053,59 @@ class NaviFragment : Fragment() {
     private fun showLabelChooser(suggestion: NavigationSuggestion) {
         AlertDialog.Builder(requireContext())
             .setItems(arrayOf("Home", "Work")) { _, which ->
-                confirmLabelReplacement(isHome = which == 0, suggestion = suggestion)
+                confirmLabelReplacement(SavedPlace.values()[which], suggestion)
             }
             .show()
     }
 
-    private fun confirmLabelReplacement(isHome: Boolean, suggestion: NavigationSuggestion) {
-        val existing = if (isHome) naviViewModel.home.value else naviViewModel.work.value
-        if (existing == null) {
-            saveLabel(isHome, suggestion)
+    private fun confirmLabelReplacement(savedPlace: SavedPlace, suggestion: NavigationSuggestion) {
+        val configured = when (savedPlace) {
+            SavedPlace.HOME -> naviViewModel.home.value != null
+            SavedPlace.WORK -> naviViewModel.work.value != null
+        }
+        if (!configured) {
+            saveLabel(savedPlace, suggestion)
             return
         }
-        val label = if (isHome) "Home" else "Work"
         AlertDialog.Builder(requireContext())
-            .setTitle("Replace $label?")
-            .setMessage("Replace the saved $label location with ${suggestion.name}?")
+            .setTitle("Replace ${savedPlace.label}?")
+            .setMessage("Replace the saved ${savedPlace.label} location with ${suggestion.name}?")
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Replace") { _, _ -> saveLabel(isHome, suggestion) }
+            .setPositiveButton("Replace") { _, _ -> saveLabel(savedPlace, suggestion) }
             .show()
     }
 
-    private fun saveLabel(isHome: Boolean, suggestion: NavigationSuggestion) {
-        if (isHome) {
-            naviViewModel.setHome(suggestion.name, suggestion.address, suggestion.point)
-        } else {
-            naviViewModel.setWork(suggestion.name, suggestion.address, suggestion.point)
+    private fun saveLabel(savedPlace: SavedPlace, suggestion: NavigationSuggestion) {
+        when (savedPlace) {
+            SavedPlace.HOME -> naviViewModel.setHome(
+                suggestion.name,
+                suggestion.address,
+                suggestion.point
+            )
+            SavedPlace.WORK -> naviViewModel.setWork(
+                suggestion.name,
+                suggestion.address,
+                suggestion.point
+            )
         }
         Toast.makeText(
             requireContext(),
-            if (isHome) "Home saved" else "Work saved",
+            "${savedPlace.label} saved",
             Toast.LENGTH_SHORT
         ).show()
     }
 
-    private fun startSavedPlaceNavigation(isHome: Boolean) {
-        val result = if (isHome) {
-            naviViewModel.startNavigatingHome()
-        } else {
-            naviViewModel.startNavigatingWork()
+    private fun startSavedPlaceNavigation(savedPlace: SavedPlace) {
+        val result = when (savedPlace) {
+            SavedPlace.HOME -> naviViewModel.startNavigatingHome()
+            SavedPlace.WORK -> naviViewModel.startNavigatingWork()
         }
         if (result == NavigationResultCode.ACCEPTED) {
             hideMainSearchPanel(clearResults = false)
         } else {
             Toast.makeText(
                 requireContext(),
-                if (isHome) "Home is not configured" else "Work is not configured",
+                "${savedPlace.label} is not configured",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -1147,6 +1162,16 @@ class NaviFragment : Fragment() {
         inputMethodManager?.hideSoftInputFromWindow(binding.searchInput.windowToken, 0)
     }
 
+    private fun View.showIf(visible: Boolean) {
+        visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    private fun NavigationStatus.showsNavigationUi(): Boolean =
+        this == NavigationStatus.ROUTE_SET || this == NavigationStatus.SIMULATING_DRIVE
+
+    private fun NavigationStatus.blocksSearchUi(): Boolean =
+        this == NavigationStatus.ROUTE_CALCULATING || showsNavigationUi()
+
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
 
@@ -1197,18 +1222,17 @@ class NaviFragment : Fragment() {
     }
 
     private fun updateNavigationUi(status: NavigationStatus) {
-        val navigationVisible = status == NavigationStatus.ROUTE_SET ||
-            status == NavigationStatus.SIMULATING_DRIVE
-        val searchVisible = status != NavigationStatus.ROUTE_CALCULATING && !navigationVisible
-        binding.searchEntry.visibility = if (searchVisible) View.VISIBLE else View.GONE
-        binding.savedPlaceShortcuts.visibility = if (searchVisible) View.VISIBLE else View.GONE
-        binding.quickPlaces.visibility = if (searchVisible) View.VISIBLE else View.GONE
-        if (!searchVisible) binding.mainSearchPanel.visibility = View.GONE
+        val navigationVisible = status.showsNavigationUi()
+        val searchVisible = !status.blocksSearchUi()
+        binding.searchEntry.showIf(searchVisible)
+        binding.savedPlaceShortcuts.showIf(searchVisible)
+        binding.quickPlaces.showIf(searchVisible)
+        if (!searchVisible) renderSearchPanel(SearchPanelMode.HIDDEN)
         binding.changeStyle.visibility = View.VISIBLE
-        binding.maneuverCard.visibility = if (navigationVisible) View.VISIBLE else View.GONE
-        binding.maneuverView.visibility = if (navigationVisible) View.VISIBLE else View.GONE
-        binding.speedLimitView.visibility = if (navigationVisible) View.VISIBLE else View.GONE
-        binding.tripProgressCard.visibility = if (navigationVisible) View.VISIBLE else View.GONE
+        binding.maneuverCard.showIf(navigationVisible)
+        binding.maneuverView.showIf(navigationVisible)
+        binding.speedLimitView.showIf(navigationVisible)
+        binding.tripProgressCard.showIf(navigationVisible)
         binding.searchInput.isEnabled = status != NavigationStatus.ROUTE_CALCULATING
         binding.searchInput.hint = when (status) {
             NavigationStatus.ROUTE_CALCULATING -> "Calculating route…"
