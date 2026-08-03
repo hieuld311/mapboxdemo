@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/normal"
+        android:icon="@drawable/street_layer"
+        android:title="2D"/>
+    <item android:id="@+id/building"
+        android:icon="@drawable/standard_layer"
+        android:title="3D" />
+    <item android:id="@+id/traffic"
+        android:icon="@drawable/traffic_layer"
+        android:title="Traffic" />
+    <item android:id="@+id/satellite"
+        android:icon="@drawable/satellite_layer"
+        android:title="Satellite" />
+</menu>

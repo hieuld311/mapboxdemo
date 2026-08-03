@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Override this value in the complete host project or a private resource overlay. -->
+    <string name="tripadvisor_api_key" translatable="false">YOUR_TRIPADVISOR_API_KEY</string>
+</resources>

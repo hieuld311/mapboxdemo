@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="NavigationManeuverPrimaryText">
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="NavigationManeuverSecondaryText">
+        <item name="android:textColor">#FFE2E8F0</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="NavigationManeuverSubText">
+        <item name="android:textColor">#FFE2E8F0</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="NavigationManeuverDistanceText">
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="NavigationTripProgressText">
+        <item name="android:textColor">#FF0F172A</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="NavigationCategoryChip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">38dp</item>
+        <item name="android:layout_marginEnd">6dp</item>
+        <item name="android:background">@drawable/bg_category_chip</item>
+        <item name="android:clickable">true</item>
+        <item name="android:elevation">3dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minWidth">72dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:textColor">#FF1E293B</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="NavigationCategoryIcon">
+        <item name="android:layout_width">46dp</item>
+        <item name="android:layout_height">46dp</item>
+        <item name="android:layout_marginEnd">7dp</item>
+        <item name="android:background">@drawable/bg_search_pill</item>
+        <item name="android:clickable">true</item>
+        <item name="android:elevation">6dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:padding">9dp</item>
+        <item name="android:scaleType">centerInside</item>
+    </style>
+
+    <style name="NavigationCompactButton">
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:backgroundTint">#FFE2E8F0</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingStart">4dp</item>
+        <item name="android:paddingEnd">4dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">#FF0F172A</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+
+    <style name="NavigationIconButton" parent="NavigationCompactButton">
+        <item name="android:layout_width">42dp</item>
+    </style>
+
+    <style name="NavigationSearchPanelAnimation">
+        <item name="android:windowEnterAnimation">@anim/navigation_panel_enter</item>
+        <item name="android:windowExitAnimation">@anim/navigation_panel_exit</item>
+    </style>
+</resources>

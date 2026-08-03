@@ -1,0 +1,599 @@
+package com.ivi.car.navigation.controller
+
+import android.content.Context
+import com.ivi.car.navigation.model.NavigationResultCode
+import com.ivi.car.navigation.model.NavigationState
+import com.ivi.car.navigation.model.NavigationStatus
+import com.ivi.car.navigation.model.NavigationSearchResult
+import com.ivi.car.navigation.model.NavigationSuggestion
+import com.ivi.car.navigation.model.HomeLocation
+import com.ivi.car.navigation.model.NearbyCategory
+import com.ivi.car.navigation.model.MapStyleMode
+import com.ivi.car.navigation.model.SuggestionSort
+import com.ivi.car.navigation.model.WorkLocation
+import com.ivi.car.navigation.repository.HomeRepository
+import com.ivi.car.navigation.repository.NavigationSearchRepository
+import com.ivi.car.navigation.repository.TripadvisorRepository
+import com.ivi.car.navigation.repository.WorkRepository
+import com.ivi.car.navigation.util.Constant
+import com.mapbox.api.directions.v5.DirectionsCriteria
+import com.mapbox.api.directions.v5.models.Bearing
+import com.mapbox.api.directions.v5.models.RouteOptions
+import com.mapbox.common.location.Location
+import com.mapbox.geojson.Point
+import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
+import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
+import com.mapbox.navigation.base.route.NavigationRoute
+import com.mapbox.navigation.base.route.NavigationRouterCallback
+import com.mapbox.navigation.base.route.RouterFailure
+import com.mapbox.navigation.core.MapboxNavigation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+object NavigationManager {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val _state = MutableStateFlow(NavigationState())
+    val state: StateFlow<NavigationState> = _state
+
+    private lateinit var applicationContext: Context
+    private lateinit var homeRepository: HomeRepository
+    private lateinit var workRepository: WorkRepository
+    private lateinit var searchRepository: NavigationSearchRepository
+    @Volatile
+    private var mapboxNavigation: MapboxNavigation? = null
+    @Volatile
+    private var currentPoint: Point? = null
+    private val suggestionsById = LinkedHashMap<String, NavigationSuggestion>()
+
+    fun initialize(context: Context) {
+        if (::applicationContext.isInitialized) return
+        applicationContext = context.applicationContext
+        homeRepository = HomeRepository(applicationContext)
+        workRepository = WorkRepository(applicationContext)
+        searchRepository = NavigationSearchRepository(
+            TripadvisorRepository(applicationContext)
+        )
+        val savedStyle = applicationContext
+            .getSharedPreferences(
+                Constant.KEY_SHARED_PREFERENCES,
+                Context.MODE_PRIVATE
+            )
+            .getInt(Constant.STYLE, MapStyleMode.NORMAL.code)
+        updateState {
+            it.copy(
+                home = homeRepository.getHome(),
+                work = workRepository.getWork(),
+                mapStyle = MapStyleMode.fromCode(savedStyle) ?: MapStyleMode.NORMAL,
+                message = null
+            )
+        }
+    }
+
+    fun attachNavigation(navigation: MapboxNavigation) {
+        mapboxNavigation = navigation
+        if (_state.value.status == NavigationStatus.UNAVAILABLE) {
+            updateState { it.copy(status = NavigationStatus.IDLE, message = null) }
+        }
+    }
+
+    fun updateCurrentPoint(point: Point?) {
+        currentPoint = point
+        if (point != null &&
+            _state.value.status == NavigationStatus.UNAVAILABLE &&
+            _state.value.destination == null
+        ) {
+            updateState {
+                it.copy(
+                    status = NavigationStatus.IDLE,
+                    message = "Location is available"
+                )
+            }
+        }
+    }
+
+    fun setRoute(destination: String): Int {
+        if (destination.isBlank()) return NavigationResultCode.INVALID_ARGUMENT
+        if (!isNavigationReady()) return setUnavailable("Navigation SDK is not ready")
+        if (currentPoint == null) return setUnavailable(
+            "Current location is unavailable",
+            NavigationResultCode.LOCATION_UNAVAILABLE
+        )
+        updateState {
+            it.copy(
+                status = NavigationStatus.ROUTE_CALCULATING,
+                suggestions = emptyList(),
+                message = "Resolving destination: $destination"
+            )
+        }
+        scope.launch {
+            val resolved = runCatching {
+                withContext(Dispatchers.IO) {
+                    searchRepository.resolveDestination(destination)
+                }
+            }.getOrNull()
+            if (resolved == null) {
+                setUnavailable("Destination was not found")
+                return@launch
+            }
+            requestRoute(
+                originLocation = null,
+                destination = resolved,
+                completion = null
+            )
+        }
+        return NavigationResultCode.ACCEPTED
+    }
+
+    suspend fun searchNearby(
+        categoryCode: Int,
+        limit: Int = DEFAULT_SEARCH_LIMIT,
+        sortCode: Int? = null
+    ): NavigationSearchResult {
+        val category = NearbyCategory.fromCode(categoryCode)
+            ?: return NavigationSearchResult(
+                NavigationResultCode.INVALID_ARGUMENT,
+                null,
+                null,
+                emptyList(),
+                "Unsupported nearby category: $categoryCode"
+            )
+        val sortBy = when (sortCode) {
+            null, SORT_UNSPECIFIED -> null
+            else -> SuggestionSort.fromCode(sortCode)
+                ?: return NavigationSearchResult(
+                    NavigationResultCode.INVALID_ARGUMENT,
+                    category,
+                    null,
+                    emptyList(),
+                    "Unsupported sort option: $sortCode"
+                )
+        }
+        val normalizedLimit = if (limit <= 0) DEFAULT_SEARCH_LIMIT else limit
+        if (normalizedLimit !in 1..MAX_SEARCH_LIMIT) {
+            return NavigationSearchResult(
+                NavigationResultCode.INVALID_ARGUMENT,
+                category,
+                sortBy,
+                emptyList(),
+                "Limit must be between 1 and $MAX_SEARCH_LIMIT"
+            )
+        }
+        val origin = currentPoint
+            ?: return NavigationSearchResult(
+                NavigationResultCode.LOCATION_UNAVAILABLE,
+                category,
+                sortBy,
+                emptyList(),
+                "Current location is unavailable"
+            )
+
+        val result = runCatching {
+            searchRepository.searchNearby(category, normalizedLimit, sortBy, origin)
+        }.getOrElse { error ->
+            NavigationSearchResult(
+                NavigationResultCode.INTERNAL_ERROR,
+                category,
+                sortBy,
+                emptyList(),
+                error.message ?: "Nearby search failed"
+            )
+        }
+        publishSearchResult(result)
+        return result
+    }
+
+    suspend fun searchDestinationSuggestions(
+        query: String,
+        limit: Int = DEFAULT_SEARCH_LIMIT
+    ): NavigationSearchResult {
+        if (query.isBlank()) {
+            return NavigationSearchResult(
+                NavigationResultCode.INVALID_ARGUMENT,
+                null,
+                null,
+                emptyList(),
+                "Destination query is empty"
+            )
+        }
+        val normalizedLimit = if (limit <= 0) DEFAULT_SEARCH_LIMIT else limit
+        if (normalizedLimit !in 1..MAX_SEARCH_LIMIT) {
+            return NavigationSearchResult(
+                NavigationResultCode.INVALID_ARGUMENT,
+                null,
+                null,
+                emptyList(),
+                "Limit must be between 1 and $MAX_SEARCH_LIMIT"
+            )
+        }
+        val result = runCatching {
+            searchRepository.searchDestinationSuggestions(
+                query = query,
+                limit = normalizedLimit,
+                origin = currentPoint
+            )
+        }.getOrElse { error ->
+            NavigationSearchResult(
+                NavigationResultCode.INTERNAL_ERROR,
+                null,
+                null,
+                emptyList(),
+                error.message ?: "Destination search failed"
+            )
+        }
+        publishSearchResult(result)
+        return result
+    }
+
+    fun clearSearchResults() {
+        synchronized(suggestionsById) {
+            suggestionsById.clear()
+        }
+        updateState { state ->
+            if (state.status == NavigationStatus.SHOWING_SUGGESTIONS ||
+                (state.status == NavigationStatus.UNAVAILABLE && state.destination == null)
+            ) {
+                state.copy(
+                    status = NavigationStatus.IDLE,
+                    suggestions = emptyList(),
+                    message = null
+                )
+            } else {
+                state.copy(suggestions = emptyList())
+            }
+        }
+    }
+
+    fun selectSuggestion(suggestionId: String): Int {
+        if (suggestionId.isBlank()) return NavigationResultCode.INVALID_ARGUMENT
+        val suggestion = synchronized(suggestionsById) {
+            if (suggestionsById.isEmpty()) {
+                return NavigationResultCode.INVALID_STATE
+            }
+            suggestionsById[suggestionId]?.also {
+                suggestionsById.clear()
+            }
+        } ?: return NavigationResultCode.NOT_FOUND
+        if (searchRepository.hasAutocompleteSuggestion(suggestionId)) {
+            if (!isNavigationReady()) return setUnavailable("Navigation SDK is not ready")
+            if (currentPoint == null) {
+                return setUnavailable(
+                    "Current location is unavailable",
+                    NavigationResultCode.LOCATION_UNAVAILABLE
+                )
+            }
+            updateState {
+                it.copy(
+                    status = NavigationStatus.ROUTE_CALCULATING,
+                    destination = suggestion,
+                    suggestions = emptyList(),
+                    message = "Resolving ${suggestion.name}"
+                )
+            }
+            scope.launch {
+                val confirmedPoint = searchRepository.confirmAutocompleteSuggestion(suggestionId)
+                if (confirmedPoint == null) {
+                    setUnavailable("Destination could not be resolved")
+                    return@launch
+                }
+                requestRoute(
+                    originLocation = null,
+                    destination = suggestion.copy(point = confirmedPoint),
+                    completion = null
+                )
+            }
+            return NavigationResultCode.ACCEPTED
+        }
+        return requestRoute(
+            originLocation = null,
+            destination = suggestion,
+            completion = null
+        )
+    }
+
+    /**
+     * UI-only detail enrichment. It deliberately does not consume the suggestion or change
+     * navigation state; Directions remains the action that calls selectSuggestion().
+     */
+    suspend fun loadSuggestionDetails(suggestionId: String): NavigationSuggestion? {
+        val suggestion = synchronized(suggestionsById) {
+            suggestionsById[suggestionId]
+        } ?: return null
+        return runCatching {
+            searchRepository.loadSuggestionDetails(suggestion)
+        }.getOrNull()
+    }
+
+    fun findRoute(
+        originLocation: Location?,
+        destinationPoint: Point,
+        destinationName: String = "Selected destination",
+        completion: ((Boolean, String?) -> Unit)? = null
+    ): Int {
+        val destination = NavigationSuggestion(
+            suggestionId = coordinateId(destinationPoint),
+            name = destinationName,
+            address = null,
+            point = destinationPoint,
+            category = null,
+            distanceMeters = null,
+            rating = null,
+            reviewCount = null,
+            ratingSource = null,
+            photoUrl = null,
+            detailsUrl = null,
+            source = "MAPBOX"
+        )
+        return requestRoute(originLocation, destination, completion)
+    }
+
+    fun startNavigatingHome(): Int {
+        val home = homeRepository.getHome()
+            ?: return NavigationResultCode.HOME_NOT_CONFIGURED
+        val destination = NavigationSuggestion(
+            suggestionId = coordinateId(home.point),
+            name = home.name,
+            address = home.address,
+            point = home.point,
+            category = null,
+            distanceMeters = null,
+            rating = null,
+            reviewCount = null,
+            ratingSource = null,
+            photoUrl = null,
+            detailsUrl = null,
+            source = "HOME"
+        )
+        return requestRoute(null, destination, null)
+    }
+
+    fun startNavigatingWork(): Int {
+        val work = workRepository.getWork()
+            ?: return NavigationResultCode.WORK_NOT_CONFIGURED
+        val destination = NavigationSuggestion(
+            suggestionId = coordinateId(work.point),
+            name = work.name,
+            address = work.address,
+            point = work.point,
+            category = null,
+            distanceMeters = null,
+            rating = null,
+            reviewCount = null,
+            ratingSource = null,
+            photoUrl = null,
+            detailsUrl = null,
+            source = "WORK"
+        )
+        return requestRoute(null, destination, null)
+    }
+
+    fun setHome(name: String, address: String?, point: Point) {
+        val home = HomeLocation(
+            name = name.ifBlank { "Home" },
+            address = address,
+            point = point,
+            updatedAt = System.currentTimeMillis()
+        )
+        homeRepository.saveHome(home)
+        updateState { it.copy(home = home, message = "Home updated") }
+    }
+
+    fun clearHome() {
+        homeRepository.clearHome()
+        updateState { it.copy(home = null, message = "Home removed") }
+    }
+
+    fun setWork(name: String, address: String?, point: Point) {
+        val work = WorkLocation(
+            name = name.ifBlank { "Work" },
+            address = address,
+            point = point,
+            updatedAt = System.currentTimeMillis()
+        )
+        workRepository.saveWork(work)
+        updateState { it.copy(work = work, message = "Work updated") }
+    }
+
+    fun clearWork() {
+        workRepository.clearWork()
+        updateState { it.copy(work = null, message = "Work removed") }
+    }
+
+    fun setMapStyle(styleCode: Int): Int {
+        val style = MapStyleMode.fromCode(styleCode)
+            ?: return NavigationResultCode.INVALID_ARGUMENT
+        applicationContext
+            .getSharedPreferences(
+                Constant.KEY_SHARED_PREFERENCES,
+                Context.MODE_PRIVATE
+            )
+            .edit()
+            .putInt(Constant.STYLE, style.code)
+            .apply()
+        updateState {
+            it.copy(
+                mapStyle = style,
+                message = "Map style changed to ${style.name}"
+            )
+        }
+        return NavigationResultCode.ACCEPTED
+    }
+
+    fun markSimulationStarted() {
+        updateState {
+            it.copy(
+                status = NavigationStatus.SIMULATING_DRIVE,
+                message = "Simulating drive"
+            )
+        }
+    }
+
+    fun updateProgress(distanceRemainingMeters: Double, durationRemainingSeconds: Int) {
+        updateState {
+            it.copy(
+                status = NavigationStatus.SIMULATING_DRIVE,
+                distanceRemainingMeters = distanceRemainingMeters,
+                durationRemainingSeconds = durationRemainingSeconds
+            )
+        }
+    }
+
+    fun stopNavigation() {
+        mapboxNavigation?.setNavigationRoutes(emptyList())
+        synchronized(suggestionsById) {
+            suggestionsById.clear()
+        }
+        updateState {
+            NavigationState(
+                status = NavigationStatus.IDLE,
+                home = homeRepository.getHome(),
+                work = workRepository.getWork(),
+                mapStyle = it.mapStyle,
+                version = it.version
+            )
+        }
+    }
+
+    fun getStateJson(): String = _state.value.toJson()
+
+    fun getHome(): HomeLocation? = homeRepository.getHome()
+
+    fun getWork(): WorkLocation? = workRepository.getWork()
+
+    private fun requestRoute(
+        originLocation: Location?,
+        destination: NavigationSuggestion,
+        completion: ((Boolean, String?) -> Unit)?
+    ): Int {
+        val navigation = mapboxNavigation
+            ?: return setUnavailable("Navigation SDK is not ready")
+        val origin = originLocation?.let {
+            Point.fromLngLat(it.longitude, it.latitude)
+        } ?: currentPoint
+            ?: return setUnavailable(
+                "Current location is unavailable",
+                NavigationResultCode.LOCATION_UNAVAILABLE
+            )
+
+        updateState {
+            it.copy(
+                status = NavigationStatus.ROUTE_CALCULATING,
+                destination = destination,
+                suggestions = emptyList(),
+                message = "Calculating route to ${destination.name}"
+            )
+        }
+        val routeOptionsBuilder = RouteOptions.builder()
+            .applyDefaultNavigationOptions()
+            .applyLanguageAndVoiceUnitOptions(applicationContext)
+            .coordinatesList(listOf(origin, destination.point))
+            .language("en-us")
+            .voiceInstructions(true)
+            .voiceUnits(DirectionsCriteria.METRIC)
+            .layersList(listOf(navigation.getZLevel(), null))
+        if (originLocation != null) {
+            routeOptionsBuilder.bearingsList(
+                listOf(
+                    originLocation.bearing?.let {
+                        Bearing.builder()
+                            .angle(it.toDouble())
+                            .degrees(60.0)
+                            .build()
+                    },
+                    null
+                )
+            )
+        }
+        navigation.requestRoutes(
+            routeOptionsBuilder.build(),
+            object : NavigationRouterCallback {
+                override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
+                    setUnavailable("Route request was canceled")
+                    completion?.invoke(false, "Route request was canceled")
+                }
+
+                override fun onFailure(
+                    reasons: List<RouterFailure>,
+                    routeOptions: RouteOptions
+                ) {
+                    val message = reasons.firstOrNull()?.toString() ?: "Route request failed"
+                    setUnavailable(message)
+                    completion?.invoke(false, message)
+                }
+
+                override fun onRoutesReady(
+                    routes: List<NavigationRoute>,
+                    routerOrigin: String
+                ) {
+                    if (routes.isEmpty()) {
+                        setUnavailable("No routes are available")
+                        completion?.invoke(false, "No routes are available")
+                        return
+                    }
+                    navigation.setNavigationRoutes(routes)
+                    updateState {
+                        it.copy(
+                            status = NavigationStatus.ROUTE_SET,
+                            destination = destination,
+                            message = "Route is ready"
+                        )
+                    }
+                    completion?.invoke(true, null)
+                }
+            }
+        )
+        return NavigationResultCode.ACCEPTED
+    }
+
+    private fun isNavigationReady(): Boolean = mapboxNavigation != null
+
+    private fun publishSearchResult(result: NavigationSearchResult) {
+        synchronized(suggestionsById) {
+            suggestionsById.clear()
+            result.candidates.forEach { suggestionsById[it.suggestionId] = it }
+        }
+        updateState {
+            it.copy(
+                status = when (result.resultCode) {
+                    NavigationResultCode.ACCEPTED -> NavigationStatus.SHOWING_SUGGESTIONS
+                    NavigationResultCode.NOT_FOUND -> NavigationStatus.IDLE
+                    else -> NavigationStatus.UNAVAILABLE
+                },
+                suggestions = result.candidates,
+                message = result.message
+            )
+        }
+    }
+
+    private fun setUnavailable(
+        message: String,
+        resultCode: Int = NavigationResultCode.UNAVAILABLE
+    ): Int {
+        updateState {
+            it.copy(
+                status = NavigationStatus.UNAVAILABLE,
+                message = message
+            )
+        }
+        return resultCode
+    }
+
+    private fun updateState(transform: (NavigationState) -> NavigationState) {
+        synchronized(_state) {
+            val previous = _state.value
+            _state.value = transform(previous).copy(version = previous.version + 1)
+        }
+    }
+
+    private fun coordinateId(point: Point): String {
+        return "${point.longitude()},${point.latitude()}"
+    }
+
+    private const val DEFAULT_SEARCH_LIMIT = 5
+    private const val MAX_SEARCH_LIMIT = 20
+    private const val SORT_UNSPECIFIED = 0
+}
