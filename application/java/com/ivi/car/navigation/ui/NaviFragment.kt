@@ -1333,20 +1333,9 @@ class NaviFragment : Fragment() {
         private val suggestionAnnotations = mutableMapOf<String, NavigationSuggestion>()
         private val mapboxMap: MapboxMap = mapView.getMapboxMap()
         private val pointAnnotationManager = mapView.annotations.createPointAnnotationManager(null)
-        private val destinationBitmap = requireNotNull(
-            ContextCompat.getDrawable(context, R.drawable.ic_destination_marker)
-        ) { "Missing destination marker drawable" }.toBitmap()
-        private val pinBitmap = destinationBitmap
-        private val categoryBitmaps = mapOf(
-            NearbyCategory.RESTAURANT to markerBitmap(context, R.drawable.ic_marker_restaurant),
-            NearbyCategory.HOTEL to markerBitmap(context, R.drawable.ic_marker_hotel),
-            NearbyCategory.HOSPITAL to markerBitmap(context, R.drawable.ic_marker_hospital),
-            NearbyCategory.GAS_STATION to markerBitmap(context, R.drawable.ic_marker_gas),
-            NearbyCategory.CONVENIENCE_STORE to markerBitmap(
-                context,
-                R.drawable.ic_marker_convenience
-            )
-        )
+        private val markerIcon = requireNotNull(
+            ContextCompat.getDrawable(context, R.drawable.ic_red_marker)
+        ) { "Missing map marker drawable" }.toBitmap()
         private var destinationPoint: Point? = null
 
         var onSuggestionClickListener: ((NavigationSuggestion) -> Unit)? = null
@@ -1391,7 +1380,7 @@ class NaviFragment : Fragment() {
             results.forEach { result ->
                 val options = PointAnnotationOptions()
                     .withPoint(result.point)
-                    .withIconImage(categoryBitmaps[result.category] ?: pinBitmap)
+                    .withIconImage(markerIcon)
                     .withIconAnchor(IconAnchor.BOTTOM)
                 val annotation = pointAnnotationManager.create(options)
                 suggestionAnnotations[annotation.id] = result
@@ -1414,15 +1403,12 @@ class NaviFragment : Fragment() {
             pointAnnotationManager.create(
                 PointAnnotationOptions()
                     .withPoint(point)
-                    .withIconImage(destinationBitmap)
+                    .withIconImage(markerIcon)
                     .withIconAnchor(IconAnchor.BOTTOM)
             )
             destinationPoint = point
         }
 
-        private fun markerBitmap(context: Context, drawableId: Int) = requireNotNull(
-            ContextCompat.getDrawable(context, drawableId)
-        ) { "Missing marker drawable: $drawableId" }.toBitmap()
     }
 
     private companion object {
