@@ -1,0 +1,29 @@
+java_import {
+  name: "navigation-lib",
+  jars: ["navigation-lib.jar"],
+}
+
+java_import {
+  name: "gson-2.9.0",
+  jars: ["gson-2.9.0.jar"],
+}
+
+java_import {
+  name: "converter-gson-2.9.0",
+  jars: ["converter-gson-2.9.0.jar"],
+}
+
+java_import {
+  name: "okhttp-3.14.9",
+  jars: ["okhttp-3.14.9.jar"],
+}
+
+java_import {
+  name: "okio-1.17.2",
+  jars: ["okio-1.17.2.jar"],
+}
+
+java_import {
+  name: "retrofit-2.9.0",
+  jars: ["retrofit-2.9.0.jar"],
+}

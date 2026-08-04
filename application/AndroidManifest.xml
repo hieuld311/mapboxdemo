@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.ivi.car.navigation"
+    android:sharedUserId="android.uid.system">
+
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS" />
+    <uses-permission android:name="ivi.car.permission.ASSISTANCE" />
+    <uses-permission android:name="ivi.car.permission.SPEECH_RECOGNITION" />
+    <uses-permission android:name="ivi.car.permission.NAVIGATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="fauto.car.permission.FSHARE_DATA" />
+    <uses-permission android:name="fauto.car.permission.CONTROL_FSHARESERVICE" />
+    <uses-permission android:name="fauto.car.permission.READ_FSHARE_DATA" />
+    <uses-permission android:name="fauto.car.permission.FSHAREDATA" />
+
+    <protected-broadcast android:name="com.fauto.car.DISMISS_INFO_CENTER" />
+    <protected-broadcast android:name="com.fauto.car.SHOW_INFO_CENTER" />
+
+    <supports-screens
+        android:anyDensity="true"
+        android:largeScreens="true"
+        android:normalScreens="true"
+        android:resizeable="true"
+        android:smallScreens="true" />
+
+    <application
+        android:name=".NavigationApp"
+        android:allowBackup="true"
+        android:icon="@drawable/ic_red_marker"
+        android:label="Navigation"
+        android:largeHeap="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Navigation">
+
+        <receiver
+            android:name=".broadcast.BroadcastReceiver"
+            android:enabled="true"
+            android:exported="true" />
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:configChanges="screenLayout|smallestScreenSize|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|fontScale|screenSize"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.NaviAidlService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NAVI_AIDL">
+            <intent-filter>
+                <action android:name="com.ivi.car.navigation.service.NaviAIDLService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".service.NavigationService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="dataSync" />
+
+        <uses-library
+            android:name="ivi.recognition"
+            android:required="true" />
+        <uses-library
+            android:name="ivi.navigation"
+            android:required="true" />
+        <uses-library
+            android:name="fauto.car"
+            android:required="true" />
+    </application>
+</manifest>

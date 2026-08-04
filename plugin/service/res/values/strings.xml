@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources>
+    <string name="fauto_car_permission_label_navigation">FAuto Car Internal Navigation Service</string>
+    <string name="fauto_car_permission_desc_navigation">Access Internal Navigation Service</string>
+
+    <string name="fauto_car_permission_label_control_navigation">FAuto Car Internal Navigation Service Control</string>
+    <string name="fauto_car_permission_desc_control_navigation">Control Internal Navigation Service</string>
+</resources>

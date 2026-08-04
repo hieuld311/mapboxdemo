@@ -1,0 +1,28 @@
+filegroup {
+    name: "fauto.car.plugin.navigation_srcs_java",
+    srcs: [
+        "src/**/*.java",
+    ],
+}
+
+filegroup {
+    name: "fauto_car_navigation_srcs",
+    srcs: [
+        ":fauto.car.plugin.navigation_srcs_java",
+        "src/**/I*.aidl",
+    ],
+}
+
+java_library {
+    name: "fauto.car.plugin.navigation",
+    static_libs: [
+        "fauto.car.base",
+        "fauto.car-static",
+    ],
+    srcs: [
+        ":fauto_car_navigation_srcs",
+    ],
+    aidl: {
+        local_include_dirs: ["src"],
+    },
+}
