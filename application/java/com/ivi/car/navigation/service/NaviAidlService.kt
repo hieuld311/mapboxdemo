@@ -85,10 +85,6 @@ class NaviAidlService : Service() {
             return NavigationManager.getStateJson()
         }
 
-        override fun setMapStyle(style: Int): Int {
-            return NavigationManager.setMapStyle(style)
-        }
-
         override fun setNavigationDemoMode(mode: Int): Int {
             return NavigationManager.setNavigationDemoMode(mode)
         }
