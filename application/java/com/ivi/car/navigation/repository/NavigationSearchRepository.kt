@@ -72,18 +72,24 @@ class NavigationSearchRepository(
         val safeLimit = limit.coerceIn(1, MAX_RESULTS)
         val suggestionsResponse = placeAutocomplete.suggestions(
             query = query,
+            proximity = origin,
             options = PlaceAutocompleteOptions()
         )
-        val suggestions = if (suggestionsResponse.isValue) {
-            suggestionsResponse.value.orEmpty().take(safeLimit)
-        } else {
-            emptyList()
+        if (!suggestionsResponse.isValue) {
+            return@withContext NavigationSearchResult(
+                resultCode = NavigationResultCode.INTERNAL_ERROR,
+                category = null,
+                sortBy = null,
+                candidates = emptyList(),
+                message = "Destination search failed: ${suggestionsResponse.error}"
+            )
         }
+        val suggestions = suggestionsResponse.value.orEmpty().take(safeLimit)
         synchronized(autocompleteSuggestionsById) {
             autocompleteSuggestionsById.clear()
         }
         val resolved = suggestions.mapNotNull { suggestion ->
-            val coordinate = suggestion.coordinate ?: return@mapNotNull null
+            val coordinate = resolveSuggestionCoordinate(suggestion) ?: return@mapNotNull null
             val stableValue = buildString {
                 append(suggestion.name)
                 append('|')
@@ -96,9 +102,8 @@ class NavigationSearchRepository(
             val suggestionId = UUID.nameUUIDFromBytes(
                 stableValue.toByteArray(StandardCharsets.UTF_8)
             ).toString()
-            synchronized(autocompleteSuggestionsById) {
-                autocompleteSuggestionsById[suggestionId] = suggestion
-            }
+            // The candidate now has a resolved coordinate, so route selection can use it
+            // directly instead of issuing a second autocomplete select request.
             NavigationSuggestion(
                 suggestionId = suggestionId,
                 name = suggestion.name,
@@ -125,8 +130,25 @@ class NavigationSearchRepository(
             category = null,
             sortBy = null,
             candidates = resolved,
-            message = if (resolved.isEmpty()) "No destination suggestions found" else null
+            message = when {
+                resolved.isNotEmpty() -> null
+                suggestions.isEmpty() -> "No destination suggestions found"
+                else -> "Destination suggestions could not be resolved"
+            }
         )
+    }
+
+    private fun resolveSuggestionCoordinate(
+        suggestion: PlaceAutocompleteSuggestion
+    ): Point? {
+        suggestion.coordinate?.let { return it }
+        var coordinate: Point? = null
+        runCatching {
+            placeAutocomplete.select(suggestion).onValue { result ->
+                coordinate = result.coordinate
+            }
+        }
+        return coordinate
     }
 
     fun hasAutocompleteSuggestion(suggestionId: String): Boolean {
