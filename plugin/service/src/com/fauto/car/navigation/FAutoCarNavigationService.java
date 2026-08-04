@@ -615,15 +615,22 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
     private void handleSetNavigationDemoMode(int mode) {
         Log.i(LOG_TAG, "handleSetNavigationDemoMode: " + mode);
-
-        /*
-         * TODO:
-         * Real implementation should forward demo mode to Navigation app AIDL.
-         * Current implementation only stores mode and notifies listeners.
-         */
-        mNavigationDemoMode = mode;
-        handleNavigationDemoModeChanged(mode);
-        handleNavigationStateChanged(buildNavigationStateJson());
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
+            handleCommandUnavailable("setNavigationDemoMode");
+            return;
+        }
+        try {
+            int result = navigationApp.setNavigationDemoMode(mode);
+            if (result == 0) {
+                mNavigationDemoMode = mode;
+                handleNavigationDemoModeChanged(mode);
+            } else {
+                handleAppCommandError("setNavigationDemoMode", result);
+            }
+        } catch (RemoteException error) {
+            handleAppRemoteException("setNavigationDemoMode", error);
+        }
     }
 
     private void handleStartNavigatingHome() {
@@ -655,6 +662,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             String status = appState.optString("status", "UNAVAILABLE");
             int state = mapAppState(status);
             JSONObject destination = appState.optJSONObject("destination");
+            int appDemoMode = appState.optInt("demoMode", mNavigationDemoMode);
 
             mNavigationState = state;
             if (destination != null) {
@@ -663,6 +671,10 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             } else {
                 mLastDestination = "";
                 mLastSuggestionId = "";
+            }
+            if (isValidNavigationDemoMode(appDemoMode) && appDemoMode != mNavigationDemoMode) {
+                mNavigationDemoMode = appDemoMode;
+                handleNavigationDemoModeChanged(appDemoMode);
             }
 
             JSONObject pluginState = new JSONObject();

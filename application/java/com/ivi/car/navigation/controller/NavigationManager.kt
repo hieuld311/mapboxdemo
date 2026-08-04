@@ -9,6 +9,7 @@ import com.ivi.car.navigation.model.NavigationSuggestion
 import com.ivi.car.navigation.model.HomeLocation
 import com.ivi.car.navigation.model.NearbyCategory
 import com.ivi.car.navigation.model.MapStyleMode
+import com.ivi.car.navigation.model.NavigationDemoMode
 import com.ivi.car.navigation.model.SuggestionSort
 import com.ivi.car.navigation.model.WorkLocation
 import com.ivi.car.navigation.repository.HomeRepository
@@ -64,11 +65,18 @@ object NavigationManager {
                 Context.MODE_PRIVATE
             )
             .getInt(Constant.STYLE, MapStyleMode.NORMAL.code)
+        val savedDemoMode = applicationContext
+            .getSharedPreferences(
+                Constant.KEY_SHARED_PREFERENCES,
+                Context.MODE_PRIVATE
+            )
+            .getInt(Constant.DEMO_MODE, NavigationDemoMode.NORMAL.code)
         updateState {
             it.copy(
                 home = homeRepository.getHome(),
                 work = workRepository.getWork(),
                 mapStyle = MapStyleMode.fromCode(savedStyle) ?: MapStyleMode.NORMAL,
+                demoMode = NavigationDemoMode.fromCode(savedDemoMode) ?: NavigationDemoMode.NORMAL,
                 message = null
             )
         }
@@ -423,6 +431,26 @@ object NavigationManager {
         return NavigationResultCode.ACCEPTED
     }
 
+    fun setNavigationDemoMode(modeCode: Int): Int {
+        val demoMode = NavigationDemoMode.fromCode(modeCode)
+            ?: return NavigationResultCode.INVALID_ARGUMENT
+        applicationContext
+            .getSharedPreferences(
+                Constant.KEY_SHARED_PREFERENCES,
+                Context.MODE_PRIVATE
+            )
+            .edit()
+            .putInt(Constant.DEMO_MODE, demoMode.code)
+            .apply()
+        updateState {
+            it.copy(
+                demoMode = demoMode,
+                message = "Demo mode changed to ${demoMode.name}"
+            )
+        }
+        return NavigationResultCode.ACCEPTED
+    }
+
     fun markSimulationStarted() {
         updateState {
             it.copy(
@@ -453,6 +481,7 @@ object NavigationManager {
                 home = homeRepository.getHome(),
                 work = workRepository.getWork(),
                 mapStyle = it.mapStyle,
+                demoMode = it.demoMode,
                 version = it.version
             )
         }

@@ -14,5 +14,6 @@ interface NaviAidlInterface {
     int selectSuggestion(String suggestionId);
     String getNavigationState();
     int setMapStyle(int style);
+    int setNavigationDemoMode(int mode);
     int startNavigatingHome();
 }

@@ -65,6 +65,16 @@ enum class MapStyleMode(val code: Int) {
     }
 }
 
+enum class NavigationDemoMode(val code: Int, val playbackSpeed: Double) {
+    NORMAL(0, 1.0),
+    TRAFFIC_JAM(1, 0.5),
+    HIGHWAY(2, 2.0);
+
+    companion object {
+        fun fromCode(code: Int): NavigationDemoMode? = values().firstOrNull { it.code == code }
+    }
+}
+
 data class NavigationSuggestion(
     val suggestionId: String,
     val name: String,
@@ -151,6 +161,7 @@ data class NavigationState(
     val home: HomeLocation? = null,
     val work: WorkLocation? = null,
     val mapStyle: MapStyleMode = MapStyleMode.NORMAL,
+    val demoMode: NavigationDemoMode = NavigationDemoMode.NORMAL,
     val distanceRemainingMeters: Double? = null,
     val durationRemainingSeconds: Int? = null,
     val message: String? = null,
@@ -166,6 +177,9 @@ data class NavigationState(
             .put("home", home?.toJson())
             .put("work", work?.toJson())
             .put("mapStyle", mapStyle.name)
+            .put("demoMode", demoMode.code)
+            .put("demoModeName", demoMode.name)
+            .put("playbackSpeed", demoMode.playbackSpeed)
             .put("distanceRemainingMeters", distanceRemainingMeters)
             .put("durationRemainingSeconds", durationRemainingSeconds)
             .put("message", message)

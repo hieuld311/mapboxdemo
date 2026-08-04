@@ -89,6 +89,10 @@ class NaviAidlService : Service() {
             return NavigationManager.setMapStyle(style)
         }
 
+        override fun setNavigationDemoMode(mode: Int): Int {
+            return NavigationManager.setNavigationDemoMode(mode)
+        }
+
         override fun startNavigatingHome(): Int {
             return NavigationManager.startNavigatingHome()
         }
@@ -140,6 +144,7 @@ class NaviAidlService : Service() {
                 previous.suggestions.map { it.suggestionId } !=
                 state.suggestions.map { it.suggestionId } ||
                 previous.mapStyle != state.mapStyle ||
+                previous.demoMode != state.demoMode ||
                 previous.message != state.message
         return structuralChange ||
             System.currentTimeMillis() - lastBroadcastAtMillis >= PROGRESS_BROADCAST_INTERVAL_MILLIS
