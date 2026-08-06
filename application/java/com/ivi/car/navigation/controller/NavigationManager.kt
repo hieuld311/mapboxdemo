@@ -59,6 +59,8 @@ object NavigationManager {
     @Volatile
     private var currentPoint: Point? = null
     private val suggestionsById = LinkedHashMap<String, NavigationSuggestion>()
+    private var pendingRouteCommand: PendingRouteCommand? = null
+    private var nextRouteCommandId = 0L
 
     fun initialize(context: Context) {
         if (::applicationContext.isInitialized) return
@@ -474,6 +476,7 @@ object NavigationManager {
                 message = "Simulating drive"
             )
         }
+        completePendingRouteCommandOnSimulationStart()
     }
 
     fun updateProgress(distanceRemainingMeters: Double, durationRemainingSeconds: Int) {
@@ -491,6 +494,7 @@ object NavigationManager {
         synchronized(suggestionsById) {
             suggestionsById.clear()
         }
+        failPendingRouteCommand("Navigation stopped before simulation started")
         updateState {
             NavigationState(
                 status = NavigationStatus.IDLE,
@@ -524,6 +528,7 @@ object NavigationManager {
                 "Current location is unavailable",
                 NavigationResultCode.LOCATION_UNAVAILABLE
             )
+        val routeCommand = commandApi?.let { beginRouteCommand(it, destination) }
 
         updateState {
             it.copy(
@@ -560,7 +565,9 @@ object NavigationManager {
                 override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
                     val message = "Route request was canceled"
                     setUnavailable(message, NavigationResultCode.INTERNAL_ERROR)
-                    commandApi?.let { emitCommandError(it, NavigationResultCode.INTERNAL_ERROR, message) }
+                    routeCommand?.let {
+                        failRouteCommand(it, NavigationResultCode.INTERNAL_ERROR, message)
+                    }
                     completion?.invoke(false, message)
                 }
 
@@ -570,7 +577,9 @@ object NavigationManager {
                 ) {
                     val message = reasons.firstOrNull()?.toString() ?: "Route request failed"
                     setUnavailable(message, NavigationResultCode.INTERNAL_ERROR)
-                    commandApi?.let { emitCommandError(it, NavigationResultCode.INTERNAL_ERROR, message) }
+                    routeCommand?.let {
+                        failRouteCommand(it, NavigationResultCode.INTERNAL_ERROR, message)
+                    }
                     completion?.invoke(false, message)
                 }
 
@@ -581,7 +590,9 @@ object NavigationManager {
                     if (routes.isEmpty()) {
                         val message = "No routes are available"
                         setUnavailable(message, NavigationResultCode.NOT_FOUND)
-                        commandApi?.let { emitCommandError(it, NavigationResultCode.NOT_FOUND, message) }
+                        routeCommand?.let {
+                            failRouteCommand(it, NavigationResultCode.NOT_FOUND, message)
+                        }
                         completion?.invoke(false, message)
                         return
                     }
@@ -593,7 +604,6 @@ object NavigationManager {
                             message = "Route is ready"
                         )
                     }
-                    commandApi?.let { emitCommandSuccess(it, destination) }
                     completion?.invoke(true, null)
                 }
             }
@@ -603,13 +613,64 @@ object NavigationManager {
 
     private fun isNavigationReady(): Boolean = mapboxNavigation != null
 
+    private fun beginRouteCommand(
+        api: String,
+        destination: NavigationSuggestion
+    ): PendingRouteCommand {
+        val command: PendingRouteCommand
+        val replaced: PendingRouteCommand?
+        synchronized(this) {
+            replaced = pendingRouteCommand
+            command = PendingRouteCommand(++nextRouteCommandId, api, destination)
+            pendingRouteCommand = command
+        }
+        replaced?.let {
+            emitCommandError(
+                it.api,
+                NavigationResultCode.INTERNAL_ERROR,
+                "Route request was replaced by a newer command"
+            )
+        }
+        return command
+    }
+
+    private fun completePendingRouteCommandOnSimulationStart() {
+        val command = synchronized(this) {
+            pendingRouteCommand.also { pendingRouteCommand = null }
+        } ?: return
+        emitCommandSuccess(command.api, command.destination)
+    }
+
+    private fun failPendingRouteCommand(message: String) {
+        val command = synchronized(this) {
+            pendingRouteCommand.also { pendingRouteCommand = null }
+        } ?: return
+        emitCommandError(command.api, NavigationResultCode.INTERNAL_ERROR, message)
+    }
+
+    private fun failRouteCommand(
+        command: PendingRouteCommand,
+        resultCode: Int,
+        message: String
+    ) {
+        val isActive = synchronized(this) {
+            if (pendingRouteCommand?.id != command.id) {
+                false
+            } else {
+                pendingRouteCommand = null
+                true
+            }
+        }
+        if (isActive) emitCommandError(command.api, resultCode, message)
+    }
+
     private fun emitCommandSuccess(api: String, destination: NavigationSuggestion) {
         _commandEvents.tryEmit(
             NavigationCommandEvent(
                 type = NavigationCommandEventType.SUCCESS,
                 api = api,
                 resultCode = NavigationResultCode.ACCEPTED,
-                message = "Route is ready",
+                message = "Navigation simulation started",
                 destination = destination
             )
         )
@@ -667,6 +728,12 @@ object NavigationManager {
     private fun coordinateId(point: Point): String {
         return "${point.longitude()},${point.latitude()}"
     }
+
+    private data class PendingRouteCommand(
+        val id: Long,
+        val api: String,
+        val destination: NavigationSuggestion
+    )
 
     private const val DEFAULT_SEARCH_LIMIT = 5
     private const val MAX_SEARCH_LIMIT = 20

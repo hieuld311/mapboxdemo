@@ -60,7 +60,7 @@ The plugin does not create mock candidates or mock routes. It forwards all real 
 | `startNavigatingHome()` | Route to the application's stored Home | Same route callbacks as `setRoute`. |
 | `sendDataTurnByTurn(data)` | Preserve the existing opaque turn-by-turn transport | `onResult` or `onError`. |
 
-For route commands, `RESULT_OK` means the request was accepted for asynchronous calculation. A later success callback means Mapbox returned a route. The app's detailed error codes are preserved in callback JSON as `appResultCode`; the plugin maps them to the public result-code set (`ERROR_UNAVAILABLE`, `ERROR_VALUE_INVALID`, `ERROR_REMOTE_EXCEPTION`, `ERROR_OPERATION_FAILED`).
+For route commands, `RESULT_OK` means the request was accepted for asynchronous calculation. A later success callback means the driving simulation has started. The app's detailed error codes are preserved in callback JSON as `appResultCode`; the plugin maps them to the public result-code set (`ERROR_UNAVAILABLE`, `ERROR_VALUE_INVALID`, `ERROR_REMOTE_EXCEPTION`, `ERROR_OPERATION_FAILED`).
 
 ## Complete navigation state flow
 
@@ -148,9 +148,9 @@ sequenceDiagram
     App->>Mapbox: resolve destination and request routes
     alt routes ready
         App-->>Plugin: state ROUTE_SET
+        App-->>Plugin: state SIMULATING_DRIVE
         App-->>Plugin: command success envelope
         Plugin-->>Client: onRouteChanged, onResult
-        App-->>Plugin: state SIMULATING_DRIVE
     else route failure
         App-->>Plugin: state UNAVAILABLE or IDLE
         App-->>Plugin: command error envelope
@@ -162,8 +162,8 @@ The synchronous integer return only represents validation and command acceptance
 
 1. `setRoute`, `selectSuggestion`, or `startNavigatingHome` returns `RESULT_OK` only after immediate app validation passes.
 2. The app broadcasts `ROUTE_CALCULATING` through `onNavigationStateChanged`.
-3. On non-empty Mapbox routes, the app broadcasts `ROUTE_SET`, emits the `navigation-command/SUCCESS` data envelope, and the UI subsequently broadcasts `SIMULATING_DRIVE` when replay begins.
-4. The plugin transforms `ROUTE_SET`/`SIMULATING_DRIVE` into public state JSON, raises `onRouteChanged` once when the route first becomes ready, and transforms the success envelope into `onResult`.
+3. On non-empty Mapbox routes, the app broadcasts `ROUTE_SET`. The plugin raises `onRouteChanged` once for this transition.
+4. When the UI starts Mapbox replay, the app broadcasts `SIMULATING_DRIVE` and emits the `navigation-command/SUCCESS` data envelope. The plugin transforms that envelope into `onResult`.
 5. On autocomplete resolution failure, cancellation, router failure, or no routes, the app broadcasts `UNAVAILABLE` and emits a `navigation-command/ERROR` envelope; the plugin delivers `onError` with both public `resultCode` and detailed `appResultCode`.
 
 Immediate failures such as an empty destination, unknown suggestion ID, no saved Home, no current location, or a disconnected app return a non-zero code directly. The plugin also emits `onError` for those paths, so callers do not need to poll state to detect a rejected command.
@@ -182,7 +182,7 @@ flowchart TD
     map --> clientCallback["FAutoCarNavigationEventListener.onNavigationStateChanged"]
 ```
 
-The app service broadcasts every structural change (status, destination, suggestion IDs, map style, demo mode, or message). Progress-only updates are coalesced to at most one broadcast per 500 ms. When a listener registers it immediately receives the current state JSON.
+The app service broadcasts every structural change (status, destination, suggestion IDs, map style, demo mode, or message). Progress-only updates are coalesced to at most one broadcast per 500 ms. When a listener registers it immediately receives the current state JSON. `getNavigationState()` is read-only and does not emit a state callback.
 
 The plugin maps names exactly as follows:
 

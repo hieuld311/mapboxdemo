@@ -377,18 +377,15 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         NaviAidlInterface navigationApp = getNavigationAppService();
         if (navigationApp != null) {
             try {
-                publishNavigationAppState(navigationApp.getNavigationState());
+                return translateNavigationAppState(navigationApp.getNavigationState());
             } catch (RemoteException error) {
                 Log.w(LOG_TAG, "Unable to query navigation app state", error);
-                clearNavigationAppService();
+                synchronized (mNavigationAppLock) {
+                    mNavigationAppService = null;
+                }
             }
-        } else {
-            bindNavigationApp();
-            publishUnavailableState("Navigation app is unavailable");
         }
-        String navigationState = mLastNavigationAppStateJson != null
-                ? mLastNavigationAppStateJson
-                : buildNavigationStateJson();
+        String navigationState = buildUnavailableStateJson();
         Log.i(LOG_TAG, "getNavigationState: " + navigationState);
         return navigationState;
     }
@@ -655,15 +652,52 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             mLastNavigationAppStateJson = pluginState.toString();
             handleNavigationStateChanged(mLastNavigationAppStateJson);
 
-            if ((state == FAutoCarNavigationManager.NAVIGATION_STATE_ROUTE_SET
-                    || state == FAutoCarNavigationManager.NAVIGATION_STATE_SIMULATING_DRIVE)
+            if (state == FAutoCarNavigationManager.NAVIGATION_STATE_ROUTE_SET
                     && state != mLastForwardedRouteState) {
-                handleRouteChanged(buildRouteDataJson(mLastDestination, mLastSuggestionId, false));
+                handleRouteChanged(buildRouteDataJson(mLastDestination, mLastSuggestionId));
             }
             mLastForwardedRouteState = state;
         } catch (JSONException error) {
             Log.e(LOG_TAG, "Invalid navigation app state", error);
             publishUnavailableState("Navigation app returned an invalid state");
+        }
+    }
+
+    /**
+     * Converts an application state response for the synchronous query API without
+     * notifying registered listeners. getNavigationState() is intentionally read-only.
+     */
+    private String translateNavigationAppState(String appStateJson) {
+        if (isEmpty(appStateJson)) {
+            return buildUnavailableStateJson();
+        }
+        try {
+            JSONObject appState = new JSONObject(appStateJson);
+            int state = mapAppState(appState.optString("status", "UNAVAILABLE"));
+            JSONObject destination = appState.optJSONObject("destination");
+            int demoMode = appState.optInt("demoMode", mNavigationDemoMode);
+            if (!isValidNavigationDemoMode(demoMode)) {
+                demoMode = FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL;
+            }
+
+            JSONObject pluginState = new JSONObject();
+            pluginState.put("state", state);
+            pluginState.put("stateName", getNavigationStateName(state));
+            pluginState.put("destination", destination != null
+                    ? destination.optString("name", "") : "");
+            pluginState.put("suggestionId", destination != null
+                    ? destination.optString("suggestionId", "") : "");
+            pluginState.put("demoMode", demoMode);
+            pluginState.put("demoModeName", getNavigationDemoModeName(demoMode));
+            pluginState.put("lastSearchCategory", mLastSearchCategory);
+            pluginState.put("lastSearchLimit", mLastSearchLimit);
+            pluginState.put("lastSearchSortedBy", mLastSearchSortedBy);
+            pluginState.put("lastSearchSortedByName", getSortByName(mLastSearchSortedBy));
+            pluginState.put("appState", appState);
+            return pluginState.toString();
+        } catch (JSONException error) {
+            Log.e(LOG_TAG, "Invalid navigation app state", error);
+            return buildUnavailableStateJson();
         }
     }
 
@@ -701,14 +735,13 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         try {
             JSONObject result = new JSONObject();
             result.put("api", "searchNearby");
-            result.put("mock", false);
             result.put("category", category);
             result.put("limit", limit);
             result.put("sortedBy", sortedBy);
             result.put("sortedByName", getSortByName(sortedBy));
             result.put("resultCode", mapAppResultCode(appResult.optInt("resultCode", -7)));
             JSONArray candidates = appResult.optJSONArray("candidates");
-            result.put("results", candidates != null ? candidates : new JSONArray());
+            result.put("candidates", candidates != null ? candidates : new JSONArray());
             if (appResult.has("message")) {
                 result.put("message", appResult.optString("message"));
             }
@@ -868,10 +901,9 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 + "}";
     }
 
-    private String buildRouteDataJson(String destination, String suggestionId, boolean mock) {
+    private String buildRouteDataJson(String destination, String suggestionId) {
         return "{"
                 + "\"api\":\"route\","
-                + "\"mock\":" + mock + ","
                 + "\"destination\":\"" + safeJson(destination) + "\","
                 + "\"suggestionId\":\"" + safeJson(suggestionId) + "\","
                 + "\"state\":" + mNavigationState + ","
@@ -886,6 +918,22 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 + "\"api\":\"" + safeJson(api) + "\","
                 + "\"resultCode\":" + code + ","
                 + "\"message\":\"" + safeJson(message) + "\""
+                + "}";
+    }
+
+    private String buildUnavailableStateJson() {
+        return "{"
+                + "\"state\":" + FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE + ","
+                + "\"stateName\":\"UNAVAILABLE\","
+                + "\"destination\":\"\","
+                + "\"suggestionId\":\"\","
+                + "\"demoMode\":" + mNavigationDemoMode + ","
+                + "\"demoModeName\":\"" + getNavigationDemoModeName(mNavigationDemoMode) + "\","
+                + "\"lastSearchCategory\":\"" + safeJson(mLastSearchCategory) + "\","
+                + "\"lastSearchLimit\":" + mLastSearchLimit + ","
+                + "\"lastSearchSortedBy\":" + mLastSearchSortedBy + ","
+                + "\"lastSearchSortedByName\":\""
+                + getSortByName(mLastSearchSortedBy) + "\""
                 + "}";
     }
 

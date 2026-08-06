@@ -219,10 +219,12 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int setRoute(@NonNull String destination) {
         if (mService == null) {
+            dispatchLocalError(ERROR_UNAVAILABLE, "setRoute", "Navigation service is unavailable");
             return ERROR_UNAVAILABLE;
         }
 
         if (destination == null || destination.trim().isEmpty()) {
+            dispatchLocalError(ERROR_VALUE_INVALID, "setRoute", "Destination is empty");
             return ERROR_VALUE_INVALID;
         }
 
@@ -230,6 +232,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             return mService.setRoute(destination);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "setRoute RemoteException", e);
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "setRoute", "Navigation service connection failed");
             return ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -237,10 +240,12 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int selectSuggestion(@NonNull String suggestionId) {
         if (mService == null) {
+            dispatchLocalError(ERROR_UNAVAILABLE, "selectSuggestion", "Navigation service is unavailable");
             return ERROR_UNAVAILABLE;
         }
 
         if (suggestionId == null || suggestionId.trim().isEmpty()) {
+            dispatchLocalError(ERROR_VALUE_INVALID, "selectSuggestion", "Suggestion id is empty");
             return ERROR_VALUE_INVALID;
         }
 
@@ -248,6 +253,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             return mService.selectSuggestion(suggestionId);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "selectSuggestion RemoteException", e);
+            dispatchLocalError(
+                    ERROR_REMOTE_EXCEPTION,
+                    "selectSuggestion",
+                    "Navigation service connection failed");
             return ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -269,10 +278,15 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int setNavigationDemoMode(@NavigationDemoMode int mode) {
         if (mService == null) {
+            dispatchLocalError(
+                    ERROR_UNAVAILABLE,
+                    "setNavigationDemoMode",
+                    "Navigation service is unavailable");
             return ERROR_UNAVAILABLE;
         }
 
         if (!isValidNavigationDemoMode(mode)) {
+            dispatchLocalError(ERROR_VALUE_INVALID, "setNavigationDemoMode", "Invalid navigation demo mode");
             return ERROR_VALUE_INVALID;
         }
 
@@ -280,6 +294,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             return mService.setNavigationDemoMode(mode);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "setNavigationDemoMode RemoteException", e);
+            dispatchLocalError(
+                    ERROR_REMOTE_EXCEPTION,
+                    "setNavigationDemoMode",
+                    "Navigation service connection failed");
             return ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -287,6 +305,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int startNavigatingHome() {
         if (mService == null) {
+            dispatchLocalError(
+                    ERROR_UNAVAILABLE,
+                    "startNavigatingHome",
+                    "Navigation service is unavailable");
             return ERROR_UNAVAILABLE;
         }
 
@@ -294,6 +316,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             return mService.startNavigatingHome();
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "startNavigatingHome RemoteException", e);
+            dispatchLocalError(
+                    ERROR_REMOTE_EXCEPTION,
+                    "startNavigatingHome",
+                    "Navigation service connection failed");
             return ERROR_REMOTE_EXCEPTION;
         }
     }
