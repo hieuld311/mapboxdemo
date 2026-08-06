@@ -25,6 +25,28 @@ enum class NavigationStatus {
     UNAVAILABLE
 }
 
+enum class NavigationCommandEventType {
+    SUCCESS,
+    ERROR
+}
+
+data class NavigationCommandEvent(
+    val type: NavigationCommandEventType,
+    val api: String,
+    val resultCode: Int,
+    val message: String? = null,
+    val destination: NavigationSuggestion? = null
+) {
+    fun toJson(): String = JSONObject()
+        .put("channel", "navigation-command")
+        .put("type", type.name)
+        .put("api", api)
+        .put("resultCode", resultCode)
+        .put("message", message)
+        .put("destination", destination?.toJson())
+        .toString()
+}
+
 enum class NearbyCategory(val code: Int, val mapboxName: String) {
     HOTEL(1, "hotel"),
     HOSPITAL(2, "hospital"),

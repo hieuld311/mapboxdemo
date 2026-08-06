@@ -33,7 +33,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         implements FAutoCarServiceBase {
     private static final String LOG_TAG = "FAutoCarNavigationService";
 
-    private static final String HOME_DESTINATION = "home";
     private static final String NAVIGATION_APP_PACKAGE = "com.ivi.car.navigation";
     private static final String NAVIGATION_APP_SERVICE =
             "com.ivi.car.navigation.service.NaviAidlService";
@@ -49,10 +48,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
     public static final int MSG_ON_SEND_DATA_TURN_BY_TURN = 0xA000;
     public static final int MSG_ON_GET_SEARCH_NEAR_BY = 0xA001;
-    public static final int MSG_ON_SET_ROUTE = 0xA002;
-    public static final int MSG_ON_SELECT_SUGGESTION = 0xA003;
-    public static final int MSG_ON_SET_NAVIGATION_DEMO_MODE = 0xA004;
-    public static final int MSG_ON_START_NAVIGATING_HOME = 0xA005;
 
     private int mNavigationState = FAutoCarNavigationManager.NAVIGATION_STATE_IDLE;
     private int mNavigationDemoMode = FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL;
@@ -71,7 +66,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private final INaviListener mNavigationAppListener = new INaviListener.Stub() {
         @Override
         public void onNaviDataReceived(String data) {
-            handleResult(data);
+            handleNavigationAppData(data);
         }
 
         @Override
@@ -119,22 +114,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
                     case MSG_ON_GET_SEARCH_NEAR_BY:
                         handleSearchNearbyCategory((String) msg.obj, msg.arg2, msg.arg1);
-                        break;
-
-                    case MSG_ON_SET_ROUTE:
-                        handleSetRoute((String) msg.obj);
-                        break;
-
-                    case MSG_ON_SELECT_SUGGESTION:
-                        handleSelectSuggestion((String) msg.obj);
-                        break;
-
-                    case MSG_ON_SET_NAVIGATION_DEMO_MODE:
-                        handleSetNavigationDemoMode(msg.arg1);
-                        break;
-
-                    case MSG_ON_START_NAVIGATING_HOME:
-                        handleStartNavigatingHome();
                         break;
 
                     default:
@@ -337,15 +316,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
-        if (mEventHandler == null) {
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Event handler is null",
-                    "setRoute"));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-
-        if (getNavigationAppService() == null) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
@@ -354,9 +326,16 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
-        mEventHandler.sendMessage(
-                Message.obtain(mEventHandler, MSG_ON_SET_ROUTE, destination));
-        return FAutoCarNavigationManager.RESULT_OK;
+        try {
+            int appResult = navigationApp.setRoute(destination);
+            if (appResult != 0) {
+                handleAppCommandError("setRoute", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("setRoute", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
     }
 
     @Override
@@ -371,15 +350,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
-        if (mEventHandler == null) {
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Event handler is null",
-                    "selectSuggestion"));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-
-        if (getNavigationAppService() == null) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
@@ -388,9 +360,16 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
-        mEventHandler.sendMessage(
-                Message.obtain(mEventHandler, MSG_ON_SELECT_SUGGESTION, suggestionId));
-        return FAutoCarNavigationManager.RESULT_OK;
+        try {
+            int appResult = navigationApp.selectSuggestion(suggestionId);
+            if (appResult != 0) {
+                handleAppCommandError("selectSuggestion", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("selectSuggestion", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
     }
 
     @Override
@@ -426,32 +405,34 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
-        if (mEventHandler == null) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
+            bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Event handler is null",
+                    "Navigation app is unavailable",
                     "setNavigationDemoMode"));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
-        mEventHandler.sendMessage(
-                Message.obtain(mEventHandler, MSG_ON_SET_NAVIGATION_DEMO_MODE, mode, 0));
-        return FAutoCarNavigationManager.RESULT_OK;
+        try {
+            int appResult = navigationApp.setNavigationDemoMode(mode);
+            if (appResult != 0) {
+                handleAppCommandError("setNavigationDemoMode", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("setNavigationDemoMode", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
     }
 
     @Override
     public int startNavigatingHome() throws RemoteException {
         Log.i(LOG_TAG, "startNavigatingHome");
 
-        if (mEventHandler == null) {
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Event handler is null",
-                    "startNavigatingHome"));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-
-        if (getNavigationAppService() == null) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
@@ -460,9 +441,16 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
-        mEventHandler.sendMessage(
-                Message.obtain(mEventHandler, MSG_ON_START_NAVIGATING_HOME));
-        return FAutoCarNavigationManager.RESULT_OK;
+        try {
+            int appResult = navigationApp.startNavigatingHome();
+            if (appResult != 0) {
+                handleAppCommandError("startNavigatingHome", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("startNavigatingHome", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
     }
 
     private int sendTurnByTurn(String data) {
@@ -556,8 +544,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     appCategory,
                     limit,
                     mapSortToAppCode(sortedBy));
-            handleSearchNearByDataToClient(
-                    buildSearchNearbyResult(result, category, limit, sortedBy));
+            forwardSearchNearbyResult(result, category, limit, sortedBy);
             return FAutoCarNavigationManager.RESULT_OK;
         } catch (RemoteException error) {
             Log.e(LOG_TAG, "searchNearBy RemoteException", error);
@@ -570,85 +557,61 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    private void handleSetRoute(String destination) {
-        Log.i(LOG_TAG, "handleSetRoute: " + destination);
-
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            handleCommandUnavailable("setRoute");
-            return;
-        }
+    private void handleNavigationAppData(String data) {
         try {
-            int result = navigationApp.setRoute(destination);
-            if (result == 0) {
-                mLastDestination = destination;
-                mLastSuggestionId = "";
-                handleResult(buildGenericResultJson("setRoute", destination));
-            } else {
-                handleAppCommandError("setRoute", result);
+            JSONObject event = new JSONObject(data);
+            if (!"navigation-command".equals(event.optString("channel"))) {
+                handleResult(data);
+                return;
             }
-        } catch (RemoteException error) {
-            handleAppRemoteException("setRoute", error);
+
+            String api = event.optString("api", "navigation");
+            int appResultCode = event.optInt("resultCode", -7);
+            String message = event.optString("message", "Navigation command failed");
+            if ("ERROR".equals(event.optString("type"))) {
+                handleError(buildAppErrorJson(api, appResultCode, message));
+                return;
+            }
+
+            JSONObject result = new JSONObject();
+            result.put("api", api);
+            result.put("resultCode", mapAppResultCode(appResultCode));
+            result.put("appResultCode", appResultCode);
+            result.put("message", message);
+            JSONObject destination = event.optJSONObject("destination");
+            if (destination != null) {
+                result.put("destination", destination);
+            }
+            handleResult(result.toString());
+        } catch (JSONException ignored) {
+            // Turn-by-turn data is intentionally opaque and must remain pass-through.
+            handleResult(data);
         }
     }
 
-    private void handleSelectSuggestion(String suggestionId) {
-        Log.i(LOG_TAG, "handleSelectSuggestion: " + suggestionId);
-
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            handleCommandUnavailable("selectSuggestion");
-            return;
-        }
+    private void forwardSearchNearbyResult(
+            String appResultJson,
+            String category,
+            int limit,
+            int sortedBy) {
         try {
-            int result = navigationApp.selectSuggestion(suggestionId);
-            if (result == 0) {
-                mLastSuggestionId = suggestionId;
-                handleResult(buildGenericResultJson("selectSuggestion", suggestionId));
-            } else {
-                handleAppCommandError("selectSuggestion", result);
+            JSONObject appResult = new JSONObject(appResultJson);
+            int appResultCode = appResult.optInt("resultCode", -7);
+            if (appResultCode != 0) {
+                handleError(buildAppErrorJson(
+                        "getSearchNearbyCategory",
+                        appResultCode,
+                        appResult.optString("message", "Nearby search failed")));
+                return;
             }
-        } catch (RemoteException error) {
-            handleAppRemoteException("selectSuggestion", error);
-        }
-    }
-
-    private void handleSetNavigationDemoMode(int mode) {
-        Log.i(LOG_TAG, "handleSetNavigationDemoMode: " + mode);
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            handleCommandUnavailable("setNavigationDemoMode");
-            return;
-        }
-        try {
-            int result = navigationApp.setNavigationDemoMode(mode);
-            if (result == 0) {
-                mNavigationDemoMode = mode;
-                handleNavigationDemoModeChanged(mode);
-            } else {
-                handleAppCommandError("setNavigationDemoMode", result);
-            }
-        } catch (RemoteException error) {
-            handleAppRemoteException("setNavigationDemoMode", error);
-        }
-    }
-
-    private void handleStartNavigatingHome() {
-        Log.i(LOG_TAG, "handleStartNavigatingHome");
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            handleCommandUnavailable("startNavigatingHome");
-            return;
-        }
-        try {
-            int result = navigationApp.startNavigatingHome();
-            if (result == 0) {
-                handleResult(buildGenericResultJson("startNavigatingHome", HOME_DESTINATION));
-            } else {
-                handleAppCommandError("startNavigatingHome", result);
-            }
-        } catch (RemoteException error) {
-            handleAppRemoteException("startNavigatingHome", error);
+            handleSearchNearByDataToClient(
+                    buildSearchNearbyResult(appResult, category, limit, sortedBy));
+        } catch (Exception error) {
+            Log.e(LOG_TAG, "Invalid search result from navigation app", error);
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                    "Navigation app returned an invalid search result",
+                    "getSearchNearbyCategory"));
         }
     }
 
@@ -714,19 +677,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    private void handleCommandUnavailable(String api) {
-        bindNavigationApp();
-        handleError(buildErrorJson(
-                FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                "Navigation app is unavailable",
-                api));
-    }
-
     private void handleAppCommandError(String api, int appResult) {
-        handleError(buildErrorJson(
-                mapAppResultCode(appResult),
-                "Navigation app rejected command (code=" + appResult + ")",
-                api));
+        handleError(buildAppErrorJson(
+                api,
+                appResult,
+                "Navigation app rejected command"));
     }
 
     private void handleAppRemoteException(String api, RemoteException error) {
@@ -739,12 +694,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     }
 
     private String buildSearchNearbyResult(
-            String appResultJson,
+            JSONObject appResult,
             String category,
             int limit,
             int sortedBy) {
         try {
-            JSONObject appResult = new JSONObject(appResultJson);
             JSONObject result = new JSONObject();
             result.put("api", "searchNearby");
             result.put("mock", false);
@@ -760,11 +714,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             }
             return result.toString();
         } catch (JSONException error) {
-            Log.e(LOG_TAG, "Invalid search result from navigation app", error);
-            return buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
-                    "Navigation app returned an invalid search result",
-                    "getSearchNearbyCategory");
+            throw new IllegalArgumentException("Unable to build nearby search result", error);
         }
     }
 
@@ -797,7 +747,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         if (appResult == -1) {
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
-        if (appResult == -2) {
+        if (appResult == -2 || appResult == -4) {
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
         return FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
@@ -931,18 +881,19 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 + "}";
     }
 
-    private String buildGenericResultJson(String api, String data) {
-        return "{"
-                + "\"api\":\"" + safeJson(api) + "\","
-                + "\"resultCode\":" + FAutoCarNavigationManager.RESULT_OK + ","
-                + "\"data\":\"" + safeJson(data) + "\""
-                + "}";
-    }
-
     private String buildErrorJson(int code, String message, String api) {
         return "{"
                 + "\"api\":\"" + safeJson(api) + "\","
                 + "\"resultCode\":" + code + ","
+                + "\"message\":\"" + safeJson(message) + "\""
+                + "}";
+    }
+
+    private String buildAppErrorJson(String api, int appResultCode, String message) {
+        return "{"
+                + "\"api\":\"" + safeJson(api) + "\","
+                + "\"resultCode\":" + mapAppResultCode(appResultCode) + ","
+                + "\"appResultCode\":" + appResultCode + ","
                 + "\"message\":\"" + safeJson(message) + "\""
                 + "}";
     }

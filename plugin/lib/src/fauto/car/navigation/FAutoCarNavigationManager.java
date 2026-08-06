@@ -161,6 +161,12 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     public void sendDataTurnByTurn(@NonNull String data) {
         if (mService == null) {
             Log.w(LOG_TAG, "sendDataTurnByTurn ignored: service is null");
+            dispatchLocalError(ERROR_UNAVAILABLE, "sendDataTurnByTurn", "Navigation service is unavailable");
+            return;
+        }
+
+        if (data == null || data.trim().isEmpty()) {
+            dispatchLocalError(ERROR_VALUE_INVALID, "sendDataTurnByTurn", "Turn-by-turn data is empty");
             return;
         }
 
@@ -168,6 +174,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             mService.sendDataTurnByTurn(data);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "sendDataTurnByTurn RemoteException", e);
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "sendDataTurnByTurn", "Navigation service connection failed");
         }
     }
 
@@ -179,21 +186,25 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     ) {
         if (mService == null) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: service is null");
+            dispatchLocalError(ERROR_UNAVAILABLE, "getSearchNearbyCategory", "Navigation service is unavailable");
             return;
         }
 
         if (category == null || category.trim().isEmpty()) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: category is empty");
+            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Category is empty");
             return;
         }
 
         if (limit <= 0) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: invalid limit=" + limit);
+            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Limit must be greater than zero");
             return;
         }
 
         if (!isValidSortBy(sortedBy)) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: invalid sortedBy=" + sortedBy);
+            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Invalid sort mode");
             return;
         }
 
@@ -201,6 +212,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             mService.getSearchNearbyCategory(category, limit, sortedBy);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "getSearchNearbyCategory RemoteException", e);
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "getSearchNearbyCategory", "Navigation service connection failed");
         }
     }
 
@@ -340,6 +352,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
                 + "}";
     }
 
+    private static String escapeJson(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     private HashSet<FAutoCarNavigationEventListener> snapshotListeners() {
         synchronized (mNavigationEventListeners) {
             return new HashSet<>(mNavigationEventListeners);
@@ -356,6 +372,14 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
         for (FAutoCarNavigationEventListener listener : snapshotListeners()) {
             mHandler.post(() -> listener.onError(data));
         }
+    }
+
+    private void dispatchLocalError(int resultCode, String api, String message) {
+        dispatchError("{"
+                + "\"api\":\"" + escapeJson(api) + "\","
+                + "\"resultCode\":" + resultCode + ","
+                + "\"message\":\"" + escapeJson(message) + "\""
+                + "}");
     }
 
     private void dispatchSearchNearByCategory(String data) {

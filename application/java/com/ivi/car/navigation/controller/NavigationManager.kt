@@ -2,6 +2,8 @@ package com.ivi.car.navigation.controller
 
 import android.content.Context
 import com.ivi.car.navigation.model.NavigationResultCode
+import com.ivi.car.navigation.model.NavigationCommandEvent
+import com.ivi.car.navigation.model.NavigationCommandEventType
 import com.ivi.car.navigation.model.NavigationState
 import com.ivi.car.navigation.model.NavigationStatus
 import com.ivi.car.navigation.model.NavigationSearchResult
@@ -32,7 +34,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -40,6 +45,10 @@ object NavigationManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(NavigationState())
     val state: StateFlow<NavigationState> = _state
+    private val _commandEvents = MutableSharedFlow<NavigationCommandEvent>(
+        extraBufferCapacity = COMMAND_EVENT_BUFFER_SIZE
+    )
+    val commandEvents: SharedFlow<NavigationCommandEvent> = _commandEvents.asSharedFlow()
 
     private lateinit var applicationContext: Context
     private lateinit var homeRepository: HomeRepository
@@ -125,13 +134,16 @@ object NavigationManager {
                 }
             }.getOrNull()
             if (resolved == null) {
-                setUnavailable("Destination was not found")
+                val message = "Destination was not found"
+                setUnavailable(message, NavigationResultCode.NOT_FOUND)
+                emitCommandError(COMMAND_SET_ROUTE, NavigationResultCode.NOT_FOUND, message)
                 return@launch
             }
             requestRoute(
                 originLocation = null,
                 destination = resolved,
-                completion = null
+                completion = null,
+                commandApi = COMMAND_SET_ROUTE
             )
         }
         return NavigationResultCode.ACCEPTED
@@ -285,13 +297,16 @@ object NavigationManager {
             scope.launch {
                 val confirmedPoint = searchRepository.confirmAutocompleteSuggestion(suggestionId)
                 if (confirmedPoint == null) {
-                    setUnavailable("Destination could not be resolved")
+                    val message = "Destination could not be resolved"
+                    setUnavailable(message, NavigationResultCode.NOT_FOUND)
+                    emitCommandError(COMMAND_SELECT_SUGGESTION, NavigationResultCode.NOT_FOUND, message)
                     return@launch
                 }
                 requestRoute(
                     originLocation = null,
                     destination = suggestion.copy(point = confirmedPoint),
-                    completion = null
+                    completion = null,
+                    commandApi = COMMAND_SELECT_SUGGESTION
                 )
             }
             return NavigationResultCode.ACCEPTED
@@ -299,7 +314,8 @@ object NavigationManager {
         return requestRoute(
             originLocation = null,
             destination = suggestion,
-            completion = null
+            completion = null,
+            commandApi = COMMAND_SELECT_SUGGESTION
         )
     }
 
@@ -356,7 +372,7 @@ object NavigationManager {
             detailsUrl = null,
             source = "HOME"
         )
-        return requestRoute(null, destination, null)
+        return requestRoute(null, destination, null, COMMAND_START_NAVIGATING_HOME)
     }
 
     fun startNavigatingWork(): Int {
@@ -496,7 +512,8 @@ object NavigationManager {
     private fun requestRoute(
         originLocation: Location?,
         destination: NavigationSuggestion,
-        completion: ((Boolean, String?) -> Unit)?
+        completion: ((Boolean, String?) -> Unit)?,
+        commandApi: String? = null
     ): Int {
         val navigation = mapboxNavigation
             ?: return setUnavailable("Navigation SDK is not ready")
@@ -541,8 +558,10 @@ object NavigationManager {
             routeOptionsBuilder.build(),
             object : NavigationRouterCallback {
                 override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
-                    setUnavailable("Route request was canceled")
-                    completion?.invoke(false, "Route request was canceled")
+                    val message = "Route request was canceled"
+                    setUnavailable(message, NavigationResultCode.INTERNAL_ERROR)
+                    commandApi?.let { emitCommandError(it, NavigationResultCode.INTERNAL_ERROR, message) }
+                    completion?.invoke(false, message)
                 }
 
                 override fun onFailure(
@@ -550,7 +569,8 @@ object NavigationManager {
                     routeOptions: RouteOptions
                 ) {
                     val message = reasons.firstOrNull()?.toString() ?: "Route request failed"
-                    setUnavailable(message)
+                    setUnavailable(message, NavigationResultCode.INTERNAL_ERROR)
+                    commandApi?.let { emitCommandError(it, NavigationResultCode.INTERNAL_ERROR, message) }
                     completion?.invoke(false, message)
                 }
 
@@ -559,8 +579,10 @@ object NavigationManager {
                     routerOrigin: String
                 ) {
                     if (routes.isEmpty()) {
-                        setUnavailable("No routes are available")
-                        completion?.invoke(false, "No routes are available")
+                        val message = "No routes are available"
+                        setUnavailable(message, NavigationResultCode.NOT_FOUND)
+                        commandApi?.let { emitCommandError(it, NavigationResultCode.NOT_FOUND, message) }
+                        completion?.invoke(false, message)
                         return
                     }
                     navigation.setNavigationRoutes(routes)
@@ -571,6 +593,7 @@ object NavigationManager {
                             message = "Route is ready"
                         )
                     }
+                    commandApi?.let { emitCommandSuccess(it, destination) }
                     completion?.invoke(true, null)
                 }
             }
@@ -579,6 +602,29 @@ object NavigationManager {
     }
 
     private fun isNavigationReady(): Boolean = mapboxNavigation != null
+
+    private fun emitCommandSuccess(api: String, destination: NavigationSuggestion) {
+        _commandEvents.tryEmit(
+            NavigationCommandEvent(
+                type = NavigationCommandEventType.SUCCESS,
+                api = api,
+                resultCode = NavigationResultCode.ACCEPTED,
+                message = "Route is ready",
+                destination = destination
+            )
+        )
+    }
+
+    private fun emitCommandError(api: String, resultCode: Int, message: String) {
+        _commandEvents.tryEmit(
+            NavigationCommandEvent(
+                type = NavigationCommandEventType.ERROR,
+                api = api,
+                resultCode = resultCode,
+                message = message
+            )
+        )
+    }
 
     private fun publishSearchResult(result: NavigationSearchResult) {
         synchronized(suggestionsById) {
@@ -625,4 +671,8 @@ object NavigationManager {
     private const val DEFAULT_SEARCH_LIMIT = 5
     private const val MAX_SEARCH_LIMIT = 20
     private const val SORT_UNSPECIFIED = 0
+    private const val COMMAND_EVENT_BUFFER_SIZE = 16
+    private const val COMMAND_SET_ROUTE = "setRoute"
+    private const val COMMAND_SELECT_SUGGESTION = "selectSuggestion"
+    private const val COMMAND_START_NAVIGATING_HOME = "startNavigatingHome"
 }

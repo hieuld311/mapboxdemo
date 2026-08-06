@@ -39,20 +39,7 @@ class NaviAidlService : Service() {
         }
 
         override fun sendNaviData(data: String) {
-            synchronized(listeners) {
-                val count = listeners.beginBroadcast()
-                try {
-                    for (i in 0 until count) {
-                        try {
-                            listeners.getBroadcastItem(i).onNaviDataReceived(data)
-                        } catch (e: RemoteException) {
-                            e.printStackTrace()
-                        }
-                    }
-                } finally {
-                    listeners.finishBroadcast()
-                }
-            }
+            broadcastNaviData(data)
         }
 
         override fun setRoute(destination: String): Int {
@@ -105,6 +92,11 @@ class NaviAidlService : Service() {
                 }
             }
         }
+        serviceScope.launch {
+            NavigationManager.commandEvents.collect { event ->
+                broadcastNaviData(event.toJson())
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -124,6 +116,23 @@ class NaviAidlService : Service() {
                 for (i in 0 until count) {
                     runCatching {
                         listeners.getBroadcastItem(i).onNavigationStateChanged(stateJson)
+                    }
+                }
+            } finally {
+                listeners.finishBroadcast()
+            }
+        }
+    }
+
+    private fun broadcastNaviData(data: String) {
+        synchronized(listeners) {
+            val count = listeners.beginBroadcast()
+            try {
+                for (i in 0 until count) {
+                    try {
+                        listeners.getBroadcastItem(i).onNaviDataReceived(data)
+                    } catch (e: RemoteException) {
+                        e.printStackTrace()
                     }
                 }
             } finally {
