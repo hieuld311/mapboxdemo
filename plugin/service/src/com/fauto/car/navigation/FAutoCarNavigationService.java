@@ -20,6 +20,8 @@ import com.ivi.car.navigation.NaviAidlInterface;
 
 import java.io.PrintWriter;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -48,6 +50,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
     public static final int MSG_ON_SEND_DATA_TURN_BY_TURN = 0xA000;
     public static final int MSG_ON_GET_SEARCH_NEAR_BY = 0xA001;
+    public static final int MSG_ON_SET_ROUTE = 0xA002;
+    public static final int MSG_ON_SELECT_SUGGESTION = 0xA003;
+    public static final int MSG_ON_SET_NAVIGATION_DEMO_MODE = 0xA004;
+    public static final int MSG_ON_START_NAVIGATING_HOME = 0xA005;
+    private static final long COMMAND_RESULT_TIMEOUT_MILLIS = 5_000L;
 
     private int mNavigationState = FAutoCarNavigationManager.NAVIGATION_STATE_IDLE;
     private int mNavigationDemoMode = FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL;
@@ -60,6 +67,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private final Object mNavigationAppLock = new Object();
     private NaviAidlInterface mNavigationAppService;
     private boolean mNavigationAppBound;
+    private volatile boolean mReleased;
     private volatile String mLastNavigationAppStateJson;
     private int mLastForwardedRouteState = FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE;
 
@@ -79,6 +87,9 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             synchronized (mNavigationAppLock) {
+                if (mReleased) {
+                    return;
+                }
                 mNavigationAppService = NaviAidlInterface.Stub.asInterface(service);
             }
             try {
@@ -106,6 +117,10 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
         @Override
         public void handleMessage(Message msg) {
+            if (mReleased) {
+                failReleasedCommand(msg);
+                return;
+            }
             try {
                 switch (msg.what) {
                     case MSG_ON_SEND_DATA_TURN_BY_TURN:
@@ -116,12 +131,44 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                         handleSearchNearbyCategory((String) msg.obj, msg.arg2, msg.arg1);
                         break;
 
+                    case MSG_ON_SET_ROUTE: {
+                        CommandRequest request = (CommandRequest) msg.obj;
+                        executeCommand(MSG_ON_SET_ROUTE, request);
+                        break;
+                    }
+
+                    case MSG_ON_SELECT_SUGGESTION: {
+                        CommandRequest request = (CommandRequest) msg.obj;
+                        executeCommand(MSG_ON_SELECT_SUGGESTION, request);
+                        break;
+                    }
+
+                    case MSG_ON_SET_NAVIGATION_DEMO_MODE: {
+                        CommandRequest request = (CommandRequest) msg.obj;
+                        executeCommand(MSG_ON_SET_NAVIGATION_DEMO_MODE, request);
+                        break;
+                    }
+
+                    case MSG_ON_START_NAVIGATING_HOME: {
+                        CommandRequest request = (CommandRequest) msg.obj;
+                        executeCommand(MSG_ON_START_NAVIGATING_HOME, request);
+                        break;
+                    }
+
                     default:
                         Log.i(LOG_TAG, "Unexpected message");
                         break;
                 }
             } catch (Exception e) {
                 Log.e(LOG_TAG, "Exception occurred when Handle message", e);
+                if (msg.obj instanceof CommandRequest) {
+                    CommandRequest request = (CommandRequest) msg.obj;
+                    request.fail(FAutoCarNavigationManager.ERROR_OPERATION_FAILED);
+                    handleError(buildErrorJson(
+                            FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                            "Navigation command failed",
+                            getApiNameForMessage(msg.what)));
+                }
             }
         }
     }
@@ -137,6 +184,10 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     @Override
     public void init(FAutoCarServiceHelper fAutoCarServiceHelper) {
         Log.d(LOG_TAG, "init");
+        if (mReleased) {
+            Log.w(LOG_TAG, "init ignored after release");
+            return;
+        }
         bindNavigationApp();
     }
 
@@ -144,6 +195,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     public void release() {
         Log.d(LOG_TAG, "release");
 
+        mReleased = true;
         unbindNavigationApp();
 
         if (mHandlerThread != null) {
@@ -154,11 +206,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     }
 
     private void bindNavigationApp() {
-        if (mContext == null) {
+        if (mReleased || mContext == null) {
             return;
         }
         synchronized (mNavigationAppLock) {
-            if (mNavigationAppBound) {
+            if (mReleased || mNavigationAppBound) {
                 return;
             }
         }
@@ -166,8 +218,21 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 .setComponent(new ComponentName(NAVIGATION_APP_PACKAGE, NAVIGATION_APP_SERVICE));
         try {
             boolean bound = mContext.bindService(intent, mNavigationAppConnection, Context.BIND_AUTO_CREATE);
+            boolean unbindAfterRelease = false;
             synchronized (mNavigationAppLock) {
-                mNavigationAppBound = bound;
+                if (mReleased) {
+                    unbindAfterRelease = bound;
+                } else {
+                    mNavigationAppBound = bound;
+                }
+            }
+            if (unbindAfterRelease) {
+                try {
+                    mContext.unbindService(mNavigationAppConnection);
+                } catch (IllegalArgumentException error) {
+                    Log.w(LOG_TAG, "Navigation app was already unbound", error);
+                }
+                return;
             }
             if (!bound) {
                 publishUnavailableState("Navigation app is unavailable");
@@ -316,26 +381,10 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            bindNavigationApp();
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "setRoute"));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-
-        try {
-            int appResult = navigationApp.setRoute(destination);
-            if (appResult != 0) {
-                handleAppCommandError("setRoute", appResult);
-            }
-            return mapAppResultCode(appResult);
-        } catch (RemoteException error) {
-            handleAppRemoteException("setRoute", error);
-            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
-        }
+        return dispatchCommand(
+                MSG_ON_SET_ROUTE,
+                CommandRequest.forString(destination),
+                "setRoute");
     }
 
     @Override
@@ -350,26 +399,10 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
-        NaviAidlInterface navigationApp = getNavigationAppService();
-        if (navigationApp == null) {
-            bindNavigationApp();
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "selectSuggestion"));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-
-        try {
-            int appResult = navigationApp.selectSuggestion(suggestionId);
-            if (appResult != 0) {
-                handleAppCommandError("selectSuggestion", appResult);
-            }
-            return mapAppResultCode(appResult);
-        } catch (RemoteException error) {
-            handleAppRemoteException("selectSuggestion", error);
-            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
-        }
+        return dispatchCommand(
+                MSG_ON_SELECT_SUGGESTION,
+                CommandRequest.forString(suggestionId),
+                "selectSuggestion");
     }
 
     @Override
@@ -402,6 +435,204 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
+        return dispatchCommand(
+                MSG_ON_SET_NAVIGATION_DEMO_MODE,
+                CommandRequest.forInt(mode),
+                "setNavigationDemoMode");
+    }
+
+    @Override
+    public int startNavigatingHome() throws RemoteException {
+        Log.i(LOG_TAG, "startNavigatingHome");
+
+        return dispatchCommand(
+                MSG_ON_START_NAVIGATING_HOME,
+                CommandRequest.empty(),
+                "startNavigatingHome");
+    }
+
+    private int dispatchCommand(int messageWhat, CommandRequest request, String api) {
+        if (mReleased) {
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Navigation service is released",
+                    api));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        Handler handler = mEventHandler;
+        if (handler == null) {
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Event handler is null",
+                    api));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        if (Looper.myLooper() == handler.getLooper()) {
+            executeCommand(messageWhat, request);
+            return request.resultCode;
+        }
+        if (!handler.sendMessage(Message.obtain(handler, messageWhat, request))) {
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Navigation command could not be queued",
+                    api));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        try {
+            if (!request.await(COMMAND_RESULT_TIMEOUT_MILLIS)) {
+                if (request.cancelIfPending()) {
+                    handler.removeMessages(messageWhat, request);
+                    handleError(buildErrorJson(
+                            FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                            "Navigation command timed out before execution",
+                            api));
+                    return FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
+                }
+                request.awaitCompletion();
+            }
+            return request.resultCode;
+        } catch (InterruptedException error) {
+            if (request.cancelIfPending()) {
+                handler.removeMessages(messageWhat, request);
+                Thread.currentThread().interrupt();
+                handleError(buildErrorJson(
+                        FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                        "Navigation command was interrupted before execution",
+                        api));
+                return FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
+            }
+
+            // The command has already started, so wait for the actual app result instead of
+            // returning an error while the command continues in the background.
+            while (true) {
+                try {
+                    request.awaitCompletion();
+                    break;
+                } catch (InterruptedException ignored) {
+                    // Keep waiting for the already-started command's actual result.
+                }
+            }
+            Thread.currentThread().interrupt();
+            return request.resultCode;
+        }
+    }
+
+    private void executeCommand(int messageWhat, CommandRequest request) {
+        if (mReleased) {
+            request.fail(FAutoCarNavigationManager.ERROR_UNAVAILABLE);
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Navigation service is released",
+                    getApiNameForMessage(messageWhat)));
+            return;
+        }
+        if (!request.tryStart()) {
+            return;
+        }
+        try {
+            switch (messageWhat) {
+                case MSG_ON_SET_ROUTE:
+                    request.complete(handleSetRoute(request.stringValue));
+                    break;
+                case MSG_ON_SELECT_SUGGESTION:
+                    request.complete(handleSelectSuggestion(request.stringValue));
+                    break;
+                case MSG_ON_SET_NAVIGATION_DEMO_MODE:
+                    request.complete(handleSetNavigationDemoMode(request.intValue));
+                    break;
+                case MSG_ON_START_NAVIGATING_HOME:
+                    request.complete(handleStartNavigatingHome());
+                    break;
+                default:
+                    request.fail(FAutoCarNavigationManager.ERROR_OPERATION_FAILED);
+                    handleError(buildErrorJson(
+                            FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                            "Unknown navigation command",
+                            getApiNameForMessage(messageWhat)));
+                    break;
+            }
+        } catch (Exception error) {
+            Log.e(LOG_TAG, "Navigation command failed", error);
+            request.fail(FAutoCarNavigationManager.ERROR_OPERATION_FAILED);
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                    "Navigation command failed",
+                    getApiNameForMessage(messageWhat)));
+        }
+    }
+
+    private static String getApiNameForMessage(int messageWhat) {
+        switch (messageWhat) {
+            case MSG_ON_SET_ROUTE:
+                return "setRoute";
+            case MSG_ON_SELECT_SUGGESTION:
+                return "selectSuggestion";
+            case MSG_ON_SET_NAVIGATION_DEMO_MODE:
+                return "setNavigationDemoMode";
+            case MSG_ON_START_NAVIGATING_HOME:
+                return "startNavigatingHome";
+            default:
+                return "navigation";
+        }
+    }
+
+    private void failReleasedCommand(Message message) {
+        if (!(message.obj instanceof CommandRequest)) {
+            return;
+        }
+        CommandRequest request = (CommandRequest) message.obj;
+        request.fail(FAutoCarNavigationManager.ERROR_UNAVAILABLE);
+        handleError(buildErrorJson(
+                FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                "Navigation service is released",
+                getApiNameForMessage(message.what)));
+    }
+
+    private int handleSetRoute(String destination) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
+            bindNavigationApp();
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Navigation app is unavailable",
+                    "setRoute"));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        try {
+            int appResult = navigationApp.setRoute(destination);
+            if (appResult != 0) {
+                handleAppCommandError("setRoute", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("setRoute", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
+    }
+
+    private int handleSelectSuggestion(String suggestionId) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
+            bindNavigationApp();
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    "Navigation app is unavailable",
+                    "selectSuggestion"));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        try {
+            int appResult = navigationApp.selectSuggestion(suggestionId);
+            if (appResult != 0) {
+                handleAppCommandError("selectSuggestion", appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException("selectSuggestion", error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
+    }
+
+    private int handleSetNavigationDemoMode(int mode) {
         NaviAidlInterface navigationApp = getNavigationAppService();
         if (navigationApp == null) {
             bindNavigationApp();
@@ -411,7 +642,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     "setNavigationDemoMode"));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
-
         try {
             int appResult = navigationApp.setNavigationDemoMode(mode);
             if (appResult != 0) {
@@ -424,10 +654,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    @Override
-    public int startNavigatingHome() throws RemoteException {
-        Log.i(LOG_TAG, "startNavigatingHome");
-
+    private int handleStartNavigatingHome() {
         NaviAidlInterface navigationApp = getNavigationAppService();
         if (navigationApp == null) {
             bindNavigationApp();
@@ -437,7 +664,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     "startNavigatingHome"));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
-
         try {
             int appResult = navigationApp.startNavigatingHome();
             if (appResult != 0) {
@@ -1010,5 +1236,84 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
 
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static final class CommandRequest {
+        private enum State {
+            PENDING,
+            RUNNING,
+            COMPLETED,
+            CANCELLED
+        }
+
+        private final String stringValue;
+        private final int intValue;
+        private final CountDownLatch completed = new CountDownLatch(1);
+        private volatile int resultCode = FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
+        private State state = State.PENDING;
+
+        private CommandRequest(String stringValue, int intValue) {
+            this.stringValue = stringValue;
+            this.intValue = intValue;
+        }
+
+        static CommandRequest forString(String value) {
+            return new CommandRequest(value, 0);
+        }
+
+        static CommandRequest forInt(int value) {
+            return new CommandRequest(null, value);
+        }
+
+        static CommandRequest empty() {
+            return new CommandRequest(null, 0);
+        }
+
+        synchronized boolean tryStart() {
+            if (state != State.PENDING) {
+                return false;
+            }
+            state = State.RUNNING;
+            return true;
+        }
+
+        synchronized boolean cancelIfPending() {
+            if (state != State.PENDING) {
+                return false;
+            }
+            state = State.CANCELLED;
+            return true;
+        }
+
+        void complete(int result) {
+            if (!finish(result)) {
+                return;
+            }
+            completed.countDown();
+        }
+
+        void fail(int result) {
+            if (!finish(result)) {
+                return;
+            }
+            completed.countDown();
+        }
+
+        private synchronized boolean finish(int result) {
+            if (state == State.COMPLETED || state == State.CANCELLED) {
+                return false;
+            }
+            resultCode = result;
+            state = State.COMPLETED;
+            return true;
+        }
+
+        boolean await(long timeoutMillis) throws InterruptedException {
+            return completed.await(timeoutMillis, TimeUnit.MILLISECONDS);
+        }
+
+        void awaitCompletion() throws InterruptedException {
+            completed.await();
+        }
     }
 }

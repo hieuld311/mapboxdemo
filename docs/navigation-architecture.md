@@ -46,7 +46,7 @@ Map style and demo mode are separate concerns. UI map-style selection stays loca
 | Public AIDL | `lib/aidl/fauto/car/navigation/IFAutoCarNavigation.aidl` | API consumed by the authorized client. |
 | App-client AIDL | `service/src/com/ivi/car/navigation/*.aidl` | Private client-side copy of the app Binder contract. It must remain descriptor-identical to the app AIDL or be replaced by a common contract artifact. |
 
-The plugin does not create mock candidates or mock routes. It forwards all real navigation work to the application. A nearby query is asynchronous; command return codes communicate immediate acceptance/validation while later results are delivered through callbacks.
+The plugin does not create mock candidates or mock routes. It forwards all real navigation work to the application. `FAutoCarNavigationService` preserves its framework `HandlerThread` message contract: `0xA000`–`0xA005` remain the internal routing units. Oneway operations remain asynchronous; commands with an `int` return use a handler result handshake so the Binder caller receives the actual forwarding result without bypassing the handler architecture. A command that has not started within the queue timeout is cancelled; once started, it returns the actual forwarding result. Later navigation outcomes are still delivered through callbacks.
 
 ## API and callback behavior
 
