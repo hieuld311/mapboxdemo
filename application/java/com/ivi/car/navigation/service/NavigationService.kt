@@ -162,14 +162,22 @@ class NavigationService: Service() {
                 previousType != navigation.getType() ||
                 kotlin.math.abs(previousDistance - navigation.getDistance()) >= 1.0
         Log.i(TAG,"Can update : $canUpdate")
-        if(!MainActivity.isRunning && canUpdate) {
-            sendNaviData()
+        if (canUpdate) {
+            publishTurnByTurnToLauncher()
+            if (!MainActivity.isRunning) {
+                sendNaviData()
+            }
         }
 
         if (routeProgress.currentState == RouteProgressState.COMPLETE) {
             NavigationManager.stopNavigation()
+            val destination = navigation.getDestination()
+            navigation = Navigation().apply {
+                setDestination(destination)
+                setStepDistance(0.0)
+            }
+            publishTurnByTurnToLauncher(arrived = true)
             if (!MainActivity.isRunning) {
-                navigation = Navigation()
                 sendNaviData()
             }
             unregisterObserver()
@@ -210,6 +218,31 @@ class NavigationService: Service() {
         sendNavDataToSomeIp(normalizeNavi)
         val data = Utils.convertToJsonData(normalizeNavi)
         fAutoShareDataManager?.onNaviDataReceived(data)
+    }
+
+    private fun publishTurnByTurnToLauncher(arrived: Boolean = false) {
+        val normalized = Utils.normalizeData(navigation)
+        val data = JSONObject()
+            .put("currentRoad", normalized.getCurrentRoad())
+            .put("destination", normalized.getDestination())
+            .put("duration", normalized.getDuration())
+            .put("distance", normalized.getDistance())
+            .put("distanceUnit", normalized.getDistanceUnit()?.name ?: "METERS")
+            .put("stepRoad", normalized.getStepRoad())
+            .put("stepDuration", normalized.getStepDuration())
+            .put("stepDistance", if (arrived) 0.0 else normalized.getStepDistance())
+            .put("stepUnit", normalized.getStepUnit()?.name ?: "METERS")
+            .put("cue", normalized.getCue())
+            .put("lane", normalized.getLane()?.name)
+            .put("type", if (arrived) "DESTINATION" else normalized.getType()?.name ?: "UNKNOWN")
+        // Keep the turn-by-turn fields at the root during the launcher migration:
+        // existing LauncherFragment versions deserialize the callback directly as Navigation.
+        // Newer versions can select the channel and deserialize the nested data object instead.
+        val payload = JSONObject(data.toString())
+            .put("channel", "turn-by-turn")
+            .put("data", data)
+            .toString()
+        LauncherTurnByTurnBus.publish(payload)
     }
 
     private fun unregisterObserver() {

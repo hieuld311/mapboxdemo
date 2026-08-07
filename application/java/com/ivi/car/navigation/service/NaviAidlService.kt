@@ -97,6 +97,11 @@ class NaviAidlService : Service() {
                 broadcastNaviData(event.toJson())
             }
         }
+        serviceScope.launch {
+            LauncherTurnByTurnBus.updates.collect { payload ->
+                broadcastNaviData(payload)
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? {

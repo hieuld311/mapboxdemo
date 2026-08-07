@@ -783,6 +783,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleNavigationAppData(String data) {
         try {
             JSONObject event = new JSONObject(data);
+            if ("turn-by-turn".equals(event.optString("channel"))) {
+                // This stream is consumed by the Launcher through the app-facing AIDL listener.
+                // It is not a completion result for a plugin command.
+                return;
+            }
             if (!"navigation-command".equals(event.optString("channel"))) {
                 handleResult(data);
                 return;
