@@ -9,7 +9,8 @@ oneway interface IFautoCarNavigationEventListener {
 
     void onNavigationStateChanged(in String data);
 
-    void onNavigationDemoModeChanged(in int mode);
+    // NAV-006 out of scope: demo-mode changes are delivered by AiSettingEventListener.
+    // void onNavigationDemoModeChanged(in int mode);
 
     void onRouteChanged(in String data);
 }

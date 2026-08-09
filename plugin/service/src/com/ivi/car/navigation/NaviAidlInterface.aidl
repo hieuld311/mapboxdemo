@@ -13,6 +13,7 @@ interface NaviAidlInterface {
     String searchNearBy(int category, int limit, int sortBy);
     int selectSuggestion(String suggestionId);
     String getNavigationState();
-    int setNavigationDemoMode(int mode);
+    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
+    // int setNavigationDemoMode(int mode);
     int startNavigatingHome();
 }

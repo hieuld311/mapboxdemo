@@ -89,8 +89,9 @@ enum class MapStyleMode(val code: Int) {
 
 enum class NavigationDemoMode(val code: Int, val playbackSpeed: Double) {
     NORMAL(0, 1.0),
-    TRAFFIC_JAM(1, 0.5),
-    HIGHWAY(2, 2.0);
+    // Demo mode is out of scope; retain values only for persisted-state compatibility.
+    TRAFFIC_JAM(1, 1.0),
+    HIGHWAY(2, 1.0);
 
     companion object {
         fun fromCode(code: Int): NavigationDemoMode? = values().firstOrNull { it.code == code }

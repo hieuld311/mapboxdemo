@@ -42,9 +42,10 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     public static final int NAVIGATION_STATE_ROUTE_SET = 3;
     public static final int NAVIGATION_STATE_SIMULATING_DRIVE = 4;
 
-    public static final int NAVIGATION_DEMO_MODE_NORMAL = 0;
-    public static final int NAVIGATION_DEMO_MODE_TRAFFIC_JAM = 1;
-    public static final int NAVIGATION_DEMO_MODE_HIGHWAY = 2;
+    // NAV-005 out of scope: demo-mode constants are not part of the plugin API.
+    // public static final int NAVIGATION_DEMO_MODE_NORMAL = 0;
+    // public static final int NAVIGATION_DEMO_MODE_TRAFFIC_JAM = 1;
+    // public static final int NAVIGATION_DEMO_MODE_HIGHWAY = 2;
 
     public static final String CATEGORY_HOTEL = "hotel";
     public static final String CATEGORY_HOSPITAL = "hospital";
@@ -78,14 +79,11 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     public @interface NavigationState {
     }
 
-    @IntDef({
-            NAVIGATION_DEMO_MODE_NORMAL,
-            NAVIGATION_DEMO_MODE_TRAFFIC_JAM,
-            NAVIGATION_DEMO_MODE_HIGHWAY
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface NavigationDemoMode {
-    }
+    // NAV-005 out of scope.
+    // @IntDef({ NAVIGATION_DEMO_MODE_NORMAL, NAVIGATION_DEMO_MODE_TRAFFIC_JAM,
+    //         NAVIGATION_DEMO_MODE_HIGHWAY })
+    // @Retention(RetentionPolicy.SOURCE)
+    // public @interface NavigationDemoMode {}
 
     @IntDef({
             SORT_BY_DISTANCE,
@@ -275,32 +273,9 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
         }
     }
 
-    @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
-    public @NavigationResultCode int setNavigationDemoMode(@NavigationDemoMode int mode) {
-        if (mService == null) {
-            dispatchLocalError(
-                    ERROR_UNAVAILABLE,
-                    "setNavigationDemoMode",
-                    "Navigation service is unavailable");
-            return ERROR_UNAVAILABLE;
-        }
-
-        if (!isValidNavigationDemoMode(mode)) {
-            dispatchLocalError(ERROR_VALUE_INVALID, "setNavigationDemoMode", "Invalid navigation demo mode");
-            return ERROR_VALUE_INVALID;
-        }
-
-        try {
-            return mService.setNavigationDemoMode(mode);
-        } catch (RemoteException e) {
-            Log.e(LOG_TAG, "setNavigationDemoMode RemoteException", e);
-            dispatchLocalError(
-                    ERROR_REMOTE_EXCEPTION,
-                    "setNavigationDemoMode",
-                    "Navigation service connection failed");
-            return ERROR_REMOTE_EXCEPTION;
-        }
-    }
+    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
+    // @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
+    // public @NavigationResultCode int setNavigationDemoMode(@NavigationDemoMode int mode) { ... }
 
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int startNavigatingHome() {
@@ -357,11 +332,8 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
         }
     }
 
-    private static boolean isValidNavigationDemoMode(int mode) {
-        return mode == NAVIGATION_DEMO_MODE_NORMAL
-                || mode == NAVIGATION_DEMO_MODE_TRAFFIC_JAM
-                || mode == NAVIGATION_DEMO_MODE_HIGHWAY;
-    }
+    // NAV-005 out of scope.
+    // private static boolean isValidNavigationDemoMode(int mode) { ... }
 
     private static boolean isValidSortBy(int sortedBy) {
         return sortedBy == SORT_BY_DISTANCE || sortedBy == SORT_BY_RATING;
@@ -372,9 +344,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
                 + "\"state\":" + NAVIGATION_STATE_UNAVAILABLE + ","
                 + "\"stateName\":\"UNAVAILABLE\","
                 + "\"destination\":\"\","
-                + "\"suggestionId\":\"\","
-                + "\"demoMode\":" + NAVIGATION_DEMO_MODE_NORMAL + ","
-                + "\"demoModeName\":\"NORMAL\""
+                + "\"suggestionId\":\"\""
                 + "}";
     }
 
@@ -420,11 +390,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
         }
     }
 
-    private void dispatchNavigationDemoModeChanged(int mode) {
-        for (FAutoCarNavigationEventListener listener : snapshotListeners()) {
-            mHandler.post(() -> listener.onNavigationDemoModeChanged(mode));
-        }
-    }
+    // NAV-006 out of scope: demo-mode changes are delivered by AiSettingEventListener.
 
     private void dispatchRouteChanged(String data) {
         for (FAutoCarNavigationEventListener listener : snapshotListeners()) {
@@ -472,13 +438,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             }
         }
 
-        @Override
-        public void onNavigationDemoModeChanged(int mode) {
-            FAutoCarNavigationManager manager = mManagerRef.get();
-            if (manager != null) {
-                manager.dispatchNavigationDemoModeChanged(mode);
-            }
-        }
+        // NAV-006 out of scope: no plugin callback forwarding.
 
         @Override
         public void onRouteChanged(String data) {
@@ -498,7 +458,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
 
         void onNavigationStateChanged(String data);
 
-        void onNavigationDemoModeChanged(@NavigationDemoMode int mode);
+        // NAV-006 out of scope: use AiSettingEventListener.onNavigationDemoModeChanged.
 
         void onRouteChanged(String data);
     }

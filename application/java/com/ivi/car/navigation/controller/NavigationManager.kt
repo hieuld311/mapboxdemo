@@ -449,25 +449,8 @@ object NavigationManager {
         return NavigationResultCode.ACCEPTED
     }
 
-    fun setNavigationDemoMode(modeCode: Int): Int {
-        val demoMode = NavigationDemoMode.fromCode(modeCode)
-            ?: return NavigationResultCode.INVALID_ARGUMENT
-        applicationContext
-            .getSharedPreferences(
-                Constant.KEY_SHARED_PREFERENCES,
-                Context.MODE_PRIVATE
-            )
-            .edit()
-            .putInt(Constant.DEMO_MODE, demoMode.code)
-            .apply()
-        updateState {
-            it.copy(
-                demoMode = demoMode,
-                message = "Demo mode changed to ${demoMode.name}"
-            )
-        }
-        return NavigationResultCode.ACCEPTED
-    }
+    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
+    // fun setNavigationDemoMode(modeCode: Int): Int { ... }
 
     fun markSimulationStarted() {
         updateState {

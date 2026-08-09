@@ -20,7 +20,6 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.gson.Gson
 import com.ivi.car.navigation.controller.NavigationManager
 import com.ivi.car.navigation.model.NavigationResultCode
-import com.ivi.car.navigation.model.NavigationDemoMode
 import com.ivi.car.navigation.model.NavigationState
 import com.ivi.car.navigation.model.NavigationSuggestion
 import com.ivi.car.navigation.model.HomeLocation
@@ -59,7 +58,6 @@ class NaviViewModel @Inject constructor(
     IviNavigationEventManager.INavigationEventListener {
     private val TAG = this.javaClass.name
     private lateinit var mapboxNavigation: MapboxNavigation
-    private var appliedDemoMode: NavigationDemoMode? = null
     lateinit var iviNavigationEventManager: IviNavigationEventManager
 
     private val _destinationPlace: MutableLiveData<String> = MutableLiveData()
@@ -154,7 +152,7 @@ class NaviViewModel @Inject constructor(
                 _suggestions.value = state.suggestions
                 _home.value = state.home
                 _work.value = state.work
-                applyDemoModeIfNavigationReady(state.demoMode)
+                applyFixedSimulationSpeedIfNavigationReady()
             }
         }
     }
@@ -168,7 +166,7 @@ class NaviViewModel @Inject constructor(
     fun setMapBoxNavigation(mapboxNavigation: MapboxNavigation) {
         this.mapboxNavigation = mapboxNavigation
         NavigationManager.attachNavigation(mapboxNavigation)
-        applyDemoModeIfNavigationReady(NavigationManager.state.value.demoMode)
+        applyFixedSimulationSpeedIfNavigationReady()
     }
 
     fun connectService() {
@@ -266,8 +264,7 @@ class NaviViewModel @Inject constructor(
         mapboxNavigation.mapboxReplayer.pushEvents(replayData)
         mapboxNavigation.mapboxReplayer.seekTo(firstEvent)
         mapboxNavigation.mapboxReplayer.play()
-        val demoMode = NavigationManager.state.value.demoMode
-        applyDemoModeIfNavigationReady(demoMode)
+        applyFixedSimulationSpeedIfNavigationReady()
         NavigationManager.markSimulationStarted()
     }
 
@@ -279,10 +276,10 @@ class NaviViewModel @Inject constructor(
     }
 
     @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
-    private fun applyDemoModeIfNavigationReady(demoMode: NavigationDemoMode) {
-        if (demoMode == appliedDemoMode || !::mapboxNavigation.isInitialized) return
-        mapboxNavigation.mapboxReplayer.playbackSpeed(demoMode.playbackSpeed)
-        appliedDemoMode = demoMode
+    private fun applyFixedSimulationSpeedIfNavigationReady() {
+        if (!::mapboxNavigation.isInitialized) return
+        // NAV-005/006 are out of scope. Terrain/demo-mode speed changes stay disabled.
+        mapboxNavigation.mapboxReplayer.playbackSpeed(1.0)
     }
 
     fun selectSuggestion(suggestionId: String): Int {
