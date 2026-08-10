@@ -837,7 +837,7 @@ class NaviFragment : Fragment() {
 
             override fun afterTextChanged(value: Editable?) {
                 val query = value?.toString().orEmpty().trim()
-                binding.searchClear.visibility = if (query.isEmpty()) View.GONE else View.VISIBLE
+                updateSearchClearVisibility()
                 searchDebounceJob?.cancel()
                 if (query.length >= 2) {
                     naviViewModel.clearSuggestionDetails()
@@ -853,7 +853,8 @@ class NaviFragment : Fragment() {
         })
         binding.searchClear.setOnClickListener {
             binding.searchInput.text?.clear()
-            naviViewModel.clearSearch()
+            hideMainSearchPanel(clearResults = true)
+            setActiveMainCategory(null)
         }
         binding.mainDetailBack.setOnClickListener { showSuggestionList() }
         binding.mainDirections.setOnClickListener {
@@ -891,6 +892,7 @@ class NaviFragment : Fragment() {
         binding.searchInput.clearFocus()
         setActiveMainCategory(category)
         renderSearchPanel(SearchPanelMode.SUGGESTIONS)
+        updateSearchClearVisibility()
         naviViewModel.clearSuggestionDetails()
         naviViewModel.searchNearby(category.code)
     }
@@ -934,6 +936,7 @@ class NaviFragment : Fragment() {
         binding.mainSearchPanel.showIf(mode != SearchPanelMode.HIDDEN)
         binding.mainSuggestionContent.showIf(mode == SearchPanelMode.SUGGESTIONS)
         binding.mainPlaceDetail.showIf(mode == SearchPanelMode.DETAIL)
+        updateSearchClearVisibility()
     }
 
     private fun bindMainPlaceDetail(
@@ -990,6 +993,21 @@ class NaviFragment : Fragment() {
         naviViewModel.clearSuggestionDetails()
         if (clearResults) naviViewModel.clearSearch()
         mapMarkersManager.adjustMarkersForClosedCard()
+    }
+
+    /**
+     * A nearby category can open the result panel without populating the text field. Keep the
+     * normal clear action available until that panel is dismissed.
+     */
+    private fun updateSearchClearVisibility() {
+        binding.searchClear.visibility = if (
+            binding.searchInput.text?.isNotBlank() == true ||
+            binding.mainSearchPanel.visibility == View.VISIBLE
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
     }
 
     private fun showLabelChooser(suggestion: NavigationSuggestion) {
