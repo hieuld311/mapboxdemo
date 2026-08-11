@@ -26,6 +26,7 @@ import com.ivi.car.navigation.model.HomeLocation
 import com.ivi.car.navigation.model.NearbyCategory
 import com.ivi.car.navigation.model.Navigation
 import com.ivi.car.navigation.model.WorkLocation
+import com.ivi.car.navigation.service.NavigationService
 import com.ivi.car.navigation.util.Utils
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.common.location.Location
@@ -33,6 +34,7 @@ import com.mapbox.geojson.Point
 import com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.core.MapboxNavigation
+import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
 import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
 import com.mapbox.search.autocomplete.PlaceAutocomplete
@@ -44,6 +46,7 @@ import fauto.car.clustercontrol.FAutoCarClusterControlManager
 import ivi.navigation.IviNavigationEventManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -105,6 +108,7 @@ class NaviViewModel @Inject constructor(
         const val INTENT_ACTION_REQUEST_ROUTE = "com.ivi.action.REQUEST_ROUTE_BY_PLACE"
         const val INTENT_ACTION_FIND_NEARBY = "com.ivi.action.REQUEST_FIND_NEARBY"
         private const val DEFAULT_SEARCH_LIMIT = 5
+        private const val SIMULATION_START_DELAY_MILLIS = 3000L
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -129,7 +133,7 @@ class NaviViewModel @Inject constructor(
                 Log.d("TurnByTurn", "onServiceConnected to $name")
                 carClusterManager =
                     car?.getFAutoCarManager(FAutoCarClusterControlManager.CLUSTERCONTROL_SERVICE)
-                        as? FAutoCarClusterControlManager
+                            as? FAutoCarClusterControlManager
             } catch (e: RemoteException) {
                 Log.e("TurnByTurn", "Failed to link to death recipient", e)
             } catch (e: DeadObjectException) {
@@ -152,7 +156,6 @@ class NaviViewModel @Inject constructor(
                 _suggestions.value = state.suggestions
                 _home.value = state.home
                 _work.value = state.work
-                applyFixedSimulationSpeedIfNavigationReady()
             }
         }
     }
@@ -163,10 +166,37 @@ class NaviViewModel @Inject constructor(
         )
     }
 
+    // Independent of NaviFragment's Resumed-only observer, so a route requested while the app
+    // is backgrounded still auto-starts the drive simulation instead of stalling at ROUTE_SET.
+    private var simulationRoutesObserverRegistered = false
+    private var pendingSimulationJob: Job? = null
+    private val replayRouteMapper = ReplayRouteMapper()
+
+    private val simulationRoutesObserver = RoutesObserver { routeUpdateResult ->
+        pendingSimulationJob?.cancel()
+        pendingSimulationJob = null
+        val primaryRoute = routeUpdateResult.navigationRoutes.firstOrNull()
+        if (primaryRoute != null) {
+            ensureNavigationServiceRunning()
+            pendingSimulationJob = viewModelScope.launch {
+                delay(SIMULATION_START_DELAY_MILLIS)
+                startSimulation(primaryRoute.directionsRoute, replayRouteMapper)
+            }
+        }
+    }
+
+    private fun ensureNavigationServiceRunning() {
+        context.startForegroundService(Intent(context, NavigationService::class.java))
+    }
+
     fun setMapBoxNavigation(mapboxNavigation: MapboxNavigation) {
         this.mapboxNavigation = mapboxNavigation
         NavigationManager.attachNavigation(mapboxNavigation)
         applyFixedSimulationSpeedIfNavigationReady()
+        if (!simulationRoutesObserverRegistered) {
+            mapboxNavigation.registerRoutesObserver(simulationRoutesObserver)
+            simulationRoutesObserverRegistered = true
+        }
     }
 
     fun connectService() {
@@ -519,6 +549,9 @@ class NaviViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        if (simulationRoutesObserverRegistered && ::mapboxNavigation.isInitialized) {
+            mapboxNavigation.unregisterRoutesObserver(simulationRoutesObserver)
+        }
         detailJob?.cancel()
         LocalBroadcastManager.getInstance(context).unregisterReceiver(receiver)
         if (::iviNavigationEventManager.isInitialized && assistanceListenerRegistered) {

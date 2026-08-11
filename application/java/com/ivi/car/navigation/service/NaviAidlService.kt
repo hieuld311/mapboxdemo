@@ -8,23 +8,25 @@ import android.os.RemoteException
 import com.ivi.car.navigation.INaviListener
 import com.ivi.car.navigation.NaviAidlInterface
 import com.ivi.car.navigation.controller.NavigationManager
+import com.ivi.car.navigation.model.NavigationCommandEventType
 import com.ivi.car.navigation.model.NavigationResultCode
 import com.ivi.car.navigation.model.NavigationSearchResult
 import com.ivi.car.navigation.model.NavigationState
+import com.ivi.car.navigation.model.NavigationStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 
 class NaviAidlService : Service() {
     private val listeners = RemoteCallbackList<INaviListener>()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var lastBroadcastState: NavigationState? = null
     private var lastBroadcastAtMillis = 0L
+    private var previousStatus: NavigationStatus? = null
 
     private val binder = object : NaviAidlInterface.Stub() {
         override fun registerListener(listener: INaviListener) {
@@ -46,21 +48,22 @@ class NaviAidlService : Service() {
             return NavigationManager.setRoute(destination)
         }
 
-        override fun searchNearBy(category: Int, limit: Int, sortBy: Int): String {
-            return runCatching {
-                runBlocking(Dispatchers.IO) {
-                    withTimeout(SEARCH_TIMEOUT_MILLIS) {
+        override fun searchNearBy(category: Int, limit: Int, sortBy: Int) {
+            serviceScope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
                         NavigationManager.searchNearby(category, limit, sortBy)
                     }
-                }.toJson()
-            }.getOrElse { error ->
-                NavigationSearchResult(
-                    resultCode = NavigationResultCode.INTERNAL_ERROR,
-                    category = null,
-                    sortBy = null,
-                    candidates = emptyList(),
-                    message = error.message ?: "Nearby search failed"
-                ).toJson()
+                }.getOrElse { error ->
+                    NavigationSearchResult(
+                        resultCode = NavigationResultCode.INTERNAL_ERROR,
+                        category = null,
+                        sortBy = null,
+                        candidates = emptyList(),
+                        message = error.message ?: "Nearby search failed"
+                    )
+                }
+                broadcastSearchNearbyResult(result.toJson())
             }
         }
 
@@ -88,11 +91,20 @@ class NaviAidlService : Service() {
                     lastBroadcastState = state
                     lastBroadcastAtMillis = System.currentTimeMillis()
                 }
+                if (previousStatus != NavigationStatus.ROUTE_SET &&
+                    state.status == NavigationStatus.ROUTE_SET
+                ) {
+                    state.destination?.let { broadcastRouteChanged(it.toJson().toString()) }
+                }
+                previousStatus = state.status
             }
         }
         serviceScope.launch {
             NavigationManager.commandEvents.collect { event ->
-                broadcastNaviData(event.toJson())
+                when (event.type) {
+                    NavigationCommandEventType.SUCCESS -> broadcastCommandResult(event.toJson())
+                    NavigationCommandEventType.ERROR -> broadcastCommandError(event.toJson())
+                }
             }
         }
         serviceScope.launch {
@@ -144,22 +156,73 @@ class NaviAidlService : Service() {
         }
     }
 
+    private fun broadcastCommandResult(data: String) {
+        synchronized(listeners) {
+            val count = listeners.beginBroadcast()
+            try {
+                for (i in 0 until count) {
+                    runCatching { listeners.getBroadcastItem(i).onCommandResult(data) }
+                }
+            } finally {
+                listeners.finishBroadcast()
+            }
+        }
+    }
+
+    private fun broadcastCommandError(data: String) {
+        synchronized(listeners) {
+            val count = listeners.beginBroadcast()
+            try {
+                for (i in 0 until count) {
+                    runCatching { listeners.getBroadcastItem(i).onCommandError(data) }
+                }
+            } finally {
+                listeners.finishBroadcast()
+            }
+        }
+    }
+
+    private fun broadcastRouteChanged(data: String) {
+        synchronized(listeners) {
+            val count = listeners.beginBroadcast()
+            try {
+                for (i in 0 until count) {
+                    runCatching { listeners.getBroadcastItem(i).onRouteChanged(data) }
+                }
+            } finally {
+                listeners.finishBroadcast()
+            }
+        }
+    }
+
+    private fun broadcastSearchNearbyResult(data: String) {
+        synchronized(listeners) {
+            val count = listeners.beginBroadcast()
+            try {
+                for (i in 0 until count) {
+                    runCatching { listeners.getBroadcastItem(i).onSearchNearbyResult(data) }
+                }
+            } finally {
+                listeners.finishBroadcast()
+            }
+        }
+    }
+
     private fun shouldBroadcast(state: NavigationState): Boolean {
         val previous = lastBroadcastState ?: return true
         val structuralChange =
             previous.status != state.status ||
-                previous.destination?.suggestionId != state.destination?.suggestionId ||
-                previous.suggestions.map { it.suggestionId } !=
-                state.suggestions.map { it.suggestionId } ||
-                previous.mapStyle != state.mapStyle ||
-                previous.demoMode != state.demoMode ||
-                previous.message != state.message
+                    previous.destination?.suggestionId != state.destination?.suggestionId ||
+                    previous.suggestions.map { it.suggestionId } !=
+                    state.suggestions.map { it.suggestionId } ||
+                    previous.mapStyle != state.mapStyle ||
+                    previous.demoMode != state.demoMode ||
+                    previous.message != state.message
         return structuralChange ||
-            System.currentTimeMillis() - lastBroadcastAtMillis >= PROGRESS_BROADCAST_INTERVAL_MILLIS
+                System.currentTimeMillis() - lastBroadcastAtMillis >= PROGRESS_BROADCAST_INTERVAL_MILLIS
     }
 
     companion object {
-        private const val SEARCH_TIMEOUT_MILLIS = 25_000L
         private const val PROGRESS_BROADCAST_INTERVAL_MILLIS = 500L
     }
 }

@@ -16,13 +16,13 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="fauto.car.permission.FSHARE_DATA" />
-    <uses-permission android:name="fauto.car.permission.CONTROL_FSHARESERVICE" />
-    <uses-permission android:name="fauto.car.permission.READ_FSHARE_DATA" />
-    <uses-permission android:name="fauto.car.permission.FSHAREDATA" />
-
+    <uses-permission android:name="fauto.car.permission.FSHARE_DATA"/>
+    <uses-permission android:name="fauto.car.permission.CONTROL_FSHARESERVICE"/>
+    <uses-permission android:name="fauto.car.permission.READ_FSHARE_DATA"/>
+    <uses-permission android:name="fauto.car.permission.FSHAREDATA"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <protected-broadcast android:name="com.fauto.car.DISMISS_INFO_CENTER" />
     <protected-broadcast android:name="com.fauto.car.SHOW_INFO_CENTER" />
 
@@ -36,16 +36,15 @@
     <application
         android:name=".NavigationApp"
         android:allowBackup="true"
-        android:icon="@drawable/ic_red_marker"
-        android:label="Navigation"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
         android:largeHeap="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.Navigation">
-
         <receiver
             android:name=".broadcast.BroadcastReceiver"
             android:enabled="true"
-            android:exported="true" />
+            android:exported="true"/>
 
         <activity
             android:name=".ui.MainActivity"
@@ -55,14 +54,15 @@
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
+
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-
         <service
             android:name=".service.NaviAidlService"
             android:exported="true"
@@ -71,12 +71,10 @@
                 <action android:name="com.ivi.car.navigation.service.NaviAIDLService" />
             </intent-filter>
         </service>
-
-        <service
-            android:name=".service.NavigationService"
+        <service android:name=".service.NavigationService"
             android:enabled="true"
             android:exported="true"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync"/>
 
         <uses-library
             android:name="ivi.recognition"
@@ -88,4 +86,5 @@
             android:name="fauto.car"
             android:required="true" />
     </application>
+
 </manifest>

@@ -52,7 +52,7 @@ enum class NearbyCategory(val code: Int, val mapboxName: String) {
     HOSPITAL(2, "hospital"),
     RESTAURANT(3, "restaurants"),
     GAS_STATION(4, "gas_station"),
-    CONVENIENCE_STORE(5, "groceries");
+    CONVENIENCE_STORE(5, "convenience_store");
 
     companion object {
         fun fromCode(code: Int): NearbyCategory? = values().firstOrNull { it.code == code }
@@ -89,7 +89,7 @@ enum class MapStyleMode(val code: Int) {
 
 enum class NavigationDemoMode(val code: Int, val playbackSpeed: Double) {
     NORMAL(0, 1.0),
-    // Demo mode is out of scope; retain values only for persisted-state compatibility.
+    // Demo mode is out of scope
     TRAFFIC_JAM(1, 1.0),
     HIGHWAY(2, 1.0);
 

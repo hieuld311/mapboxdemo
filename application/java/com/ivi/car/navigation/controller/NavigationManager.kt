@@ -42,6 +42,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object NavigationManager {
+    private const val DEFAULT_SEARCH_LIMIT = 5
+    private const val MAX_SEARCH_LIMIT = 20
+    private const val SORT_UNSPECIFIED = 0
+    private const val COMMAND_EVENT_BUFFER_SIZE = 16
+    private const val COMMAND_SET_ROUTE = "setRoute"
+    private const val COMMAND_SELECT_SUGGESTION = "selectSuggestion"
+    private const val COMMAND_START_NAVIGATING_HOME = "startNavigatingHome"
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(NavigationState())
     val state: StateFlow<NavigationState> = _state
@@ -340,62 +348,43 @@ object NavigationManager {
         destinationName: String = "Selected destination",
         completion: ((Boolean, String?) -> Unit)? = null
     ): Int {
-        val destination = NavigationSuggestion(
-            suggestionId = coordinateId(destinationPoint),
-            name = destinationName,
-            address = null,
-            point = destinationPoint,
-            category = null,
-            distanceMeters = null,
-            rating = null,
-            reviewCount = null,
-            ratingSource = null,
-            photoUrl = null,
-            detailsUrl = null,
-            source = "MAPBOX"
-        )
+        val destination = suggestionFor(destinationPoint, destinationName, null, "MAPBOX")
         return requestRoute(originLocation, destination, completion)
     }
 
     fun startNavigatingHome(): Int {
         val home = homeRepository.getHome()
             ?: return NavigationResultCode.HOME_NOT_CONFIGURED
-        val destination = NavigationSuggestion(
-            suggestionId = coordinateId(home.point),
-            name = home.name,
-            address = home.address,
-            point = home.point,
-            category = null,
-            distanceMeters = null,
-            rating = null,
-            reviewCount = null,
-            ratingSource = null,
-            photoUrl = null,
-            detailsUrl = null,
-            source = "HOME"
-        )
+        val destination = suggestionFor(home.point, home.name, home.address, "HOME")
         return requestRoute(null, destination, null, COMMAND_START_NAVIGATING_HOME)
     }
 
     fun startNavigatingWork(): Int {
         val work = workRepository.getWork()
             ?: return NavigationResultCode.WORK_NOT_CONFIGURED
-        val destination = NavigationSuggestion(
-            suggestionId = coordinateId(work.point),
-            name = work.name,
-            address = work.address,
-            point = work.point,
-            category = null,
-            distanceMeters = null,
-            rating = null,
-            reviewCount = null,
-            ratingSource = null,
-            photoUrl = null,
-            detailsUrl = null,
-            source = "WORK"
-        )
+        val destination = suggestionFor(work.point, work.name, work.address, "WORK")
         return requestRoute(null, destination, null)
     }
+
+    private fun suggestionFor(
+        point: Point,
+        name: String,
+        address: String?,
+        source: String
+    ): NavigationSuggestion = NavigationSuggestion(
+        suggestionId = coordinateId(point),
+        name = name,
+        address = address,
+        point = point,
+        category = null,
+        distanceMeters = null,
+        rating = null,
+        reviewCount = null,
+        ratingSource = null,
+        photoUrl = null,
+        detailsUrl = null,
+        source = source
+    )
 
     fun setHome(name: String, address: String?, point: Point) {
         val home = HomeLocation(
@@ -448,9 +437,6 @@ object NavigationManager {
         }
         return NavigationResultCode.ACCEPTED
     }
-
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // fun setNavigationDemoMode(modeCode: Int): Int { ... }
 
     fun markSimulationStarted() {
         updateState {
@@ -507,10 +493,10 @@ object NavigationManager {
         val origin = originLocation?.let {
             Point.fromLngLat(it.longitude, it.latitude)
         } ?: currentPoint
-            ?: return setUnavailable(
-                "Current location is unavailable",
-                NavigationResultCode.LOCATION_UNAVAILABLE
-            )
+        ?: return setUnavailable(
+            "Current location is unavailable",
+            NavigationResultCode.LOCATION_UNAVAILABLE
+        )
         val routeCommand = commandApi?.let { beginRouteCommand(it, destination) }
 
         updateState {
@@ -717,12 +703,4 @@ object NavigationManager {
         val api: String,
         val destination: NavigationSuggestion
     )
-
-    private const val DEFAULT_SEARCH_LIMIT = 5
-    private const val MAX_SEARCH_LIMIT = 20
-    private const val SORT_UNSPECIFIED = 0
-    private const val COMMAND_EVENT_BUFFER_SIZE = 16
-    private const val COMMAND_SET_ROUTE = "setRoute"
-    private const val COMMAND_SELECT_SUGGESTION = "selectSuggestion"
-    private const val COMMAND_START_NAVIGATING_HOME = "startNavigatingHome"
 }

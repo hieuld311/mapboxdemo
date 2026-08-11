@@ -1,4 +1,5 @@
-// NaviAidlInterface.aidl
+// Shared plugin-to-application command contract. Keep this package and method order
+// identical to the navigation application's AIDL definition.
 package com.ivi.car.navigation;
 
 import com.ivi.car.navigation.INaviListener;
@@ -7,13 +8,9 @@ interface NaviAidlInterface {
     void registerListener(INaviListener listener);
     void unregisterListener(INaviListener listener);
     void sendNaviData(String data);
-
     int setRoute(String destination);
-    // limit <= 0 uses the application default (5); sortBy == 0 means unspecified.
-    String searchNearBy(int category, int limit, int sortBy);
+    void searchNearBy(int category, int limit, int sortBy);
     int selectSuggestion(String suggestionId);
     String getNavigationState();
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // int setNavigationDemoMode(int mode);
     int startNavigatingHome();
 }

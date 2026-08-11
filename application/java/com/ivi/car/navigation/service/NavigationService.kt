@@ -53,7 +53,7 @@ class NavigationService: Service() {
                 ?.let { manager -> manager as? FAutoShareDataManager }
             carClusterManager =
                 fAutoCar?.getFAutoCarManager(FAutoCarClusterControlManager.CLUSTERCONTROL_SERVICE)
-                    as? FAutoCarClusterControlManager
+                        as? FAutoCarClusterControlManager
 
             Log.i(TAG,"fAutoShareDataManager != null : ${fAutoShareDataManager!= null}")
 
@@ -158,9 +158,9 @@ class NavigationService: Service() {
         )
         val canUpdate =
             previousStepRoad != navigation.getStepRoad() ||
-                kotlin.math.abs(previousStepDistance - navigation.getStepDistance()) >= 1.0 ||
-                previousType != navigation.getType() ||
-                kotlin.math.abs(previousDistance - navigation.getDistance()) >= 1.0
+                    kotlin.math.abs(previousStepDistance - navigation.getStepDistance()) >= 1.0 ||
+                    previousType != navigation.getType() ||
+                    kotlin.math.abs(previousDistance - navigation.getDistance()) >= 1.0
         Log.i(TAG,"Can update : $canUpdate")
         if (canUpdate) {
             publishTurnByTurnToLauncher()

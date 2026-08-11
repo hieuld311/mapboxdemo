@@ -10,9 +10,7 @@ import android.content.ServiceConnection
 import android.content.res.Resources
 import android.location.Location
 import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -32,6 +30,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
@@ -57,6 +57,7 @@ import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.EdgeInsets
+import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.MapView
 import com.mapbox.maps.MapboxMap
 import com.mapbox.maps.Style
@@ -87,7 +88,6 @@ import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationObserver
 import com.mapbox.navigation.core.lifecycle.requireMapboxNavigation
 import com.mapbox.navigation.core.replay.route.ReplayProgressObserver
-import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
@@ -182,19 +182,16 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private val replayRouteMapper = ReplayRouteMapper()
-
     private lateinit var replayProgressObserver: ReplayProgressObserver
 
     private lateinit var navigationCamera: NavigationCamera
 
     private lateinit var viewportDataSource: MapboxNavigationViewportDataSource
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var pendingSimulationRunnable: Runnable? = null
     private var navigation: Navigation = Navigation()
     private var routeTotalDistanceMeters: Double? = null
     private var appliedMapStyle: MapStyleMode? = null
+    private var lastObservedStatus: NavigationStatus? = null
 
     private var jobResetToFlowing: Job? = null
     private var mockLocationUpdateJob: Job? = null
@@ -397,7 +394,6 @@ class NaviFragment : Fragment() {
     }
 
     private fun stopSimulationInvoke() {
-        cancelPendingSimulation()
         routeTotalDistanceMeters = null
         naviViewModel.clearNavigationRoutes()
         navigation = Navigation()
@@ -411,7 +407,12 @@ class NaviFragment : Fragment() {
 
     private fun updateVehiclePuck() {
         binding.mapView.location.apply {
-            locationPuck = createDefault2DPuck(true)
+            locationPuck = createDefault2DPuck(true).apply {
+                topImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                bearingImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                shadowImage =
+                    ImageHolder.Companion.from(com.mapbox.maps.R.drawable.mapbox_user_icon_shadow)
+            }
         }
     }
 
@@ -434,22 +435,8 @@ class NaviFragment : Fragment() {
                 //binding.routeOverview.visibility = View.VISIBLE
                 binding.maneuverCard.visibility = View.VISIBLE
                 binding.tripProgressCard.visibility = View.VISIBLE
-                cancelPendingSimulation()
-                pendingSimulationRunnable = Runnable {
-                    naviViewModel.startSimulation(
-                        primaryRoute.directionsRoute,
-                        replayRouteMapper
-                    )
-
-                    navigationCamera.requestNavigationCameraToFollowing {
-                        viewportDataSource.followingZoomPropertyOverride(17.0)
-                        viewportDataSource.evaluate()
-                    }
-                }
-                handler.postDelayed(requireNotNull(pendingSimulationRunnable), 3000)
             }
         } else {
-            cancelPendingSimulation()
             // remove the route line and route arrow from the map
             val style = binding.mapView.mapboxMap.style
             if (style != null) {
@@ -465,11 +452,6 @@ class NaviFragment : Fragment() {
             viewportDataSource.clearRouteData()
             viewportDataSource.evaluate()
         }
-    }
-
-    private fun cancelPendingSimulation() {
-        pendingSimulationRunnable?.let(handler::removeCallbacks)
-        pendingSimulationRunnable = null
     }
 
     @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
@@ -548,14 +530,14 @@ class NaviFragment : Fragment() {
         )
         tripProgressApi = MapboxTripProgressApi(
             TripProgressUpdateFormatter.Builder(requireContext()).distanceRemainingFormatter(
-                    DistanceRemainingFormatter(distanceFormatterOptions)
-                ).timeRemainingFormatter(
-                    TimeRemainingFormatter(requireContext())
-                ).percentRouteTraveledFormatter(
-                    PercentDistanceTraveledFormatter()
-                ).estimatedTimeToArrivalFormatter(
-                    EstimatedTimeToArrivalFormatter(requireContext(), TimeFormat.NONE_SPECIFIED)
-                ).build()
+                DistanceRemainingFormatter(distanceFormatterOptions)
+            ).timeRemainingFormatter(
+                TimeRemainingFormatter(requireContext())
+            ).percentRouteTraveledFormatter(
+                PercentDistanceTraveledFormatter()
+            ).estimatedTimeToArrivalFormatter(
+                EstimatedTimeToArrivalFormatter(requireContext(), TimeFormat.NONE_SPECIFIED)
+            ).build()
         )
         val mapboxRouteApiOptions =
             MapboxRouteLineApiOptions.Builder().vanishingRouteLineEnabled(true).build()
@@ -567,6 +549,7 @@ class NaviFragment : Fragment() {
         mapMarkersManager = MapMarkersManager(binding.mapView, requireContext())
         sharedPreferences = SharePreferences.getPrefs(requireContext())
         isVoiceInstructionsMuted = audioViewModel.isVoiceInstructionsMuted
+        configureImeControlsVisibility()
         initView()
         initAction()
         initObserver()
@@ -604,10 +587,14 @@ class NaviFragment : Fragment() {
             showAccuracyRing = true
             enabled = true
             puckBearing = PuckBearing.COURSE
-            locationPuck = createDefault2DPuck(true)
+            locationPuck = createDefault2DPuck(true).apply {
+                topImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                bearingImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                shadowImage = ImageHolder.Companion.from(com.mapbox.maps.R.drawable.mapbox_user_icon_shadow)
+            }
         }
-        binding.mapView.logo.enabled = true
-        binding.mapView.attribution.enabled = true
+        binding.mapView.logo.enabled = false
+        binding.mapView.attribution.enabled = false
         binding.mapView.scalebar.enabled = false
         binding.mapView.compass.enabled = false
 
@@ -672,21 +659,21 @@ class NaviFragment : Fragment() {
             binding.mapView.mapboxMap.setCamera(CameraOptions.Builder().zoom(zoom).build())
         }
 
-        binding.mapRecenter.setOnClickListener {
-            if (navigationLocationProvider.lastLocation != null) {
-                isSimulation = true
-                navigationCamera.requestNavigationCameraToFollowing()
-            } else {
-                naviViewModel.currentPoint?.let { point ->
-                    binding.mapView.mapboxMap.setCamera(
-                        CameraOptions.Builder()
-                            .center(point)
-                            .zoom(15.0)
-                            .build()
-                    )
-                }
-            }
-        }
+//        binding.mapRecenter.setOnClickListener {
+//            if (navigationLocationProvider.lastLocation != null) {
+//                isSimulation = true
+//                navigationCamera.requestNavigationCameraToFollowing()
+//            } else {
+//                naviViewModel.currentPoint?.let { point ->
+//                    binding.mapView.mapboxMap.setCamera(
+//                        CameraOptions.Builder()
+//                            .center(point)
+//                            .zoom(15.0)
+//                            .build()
+//                    )
+//                }
+//            }
+//        }
 
         mapMarkersManager.onSuggestionClickListener = { result ->
             showMainPlaceDetail(result)
@@ -787,6 +774,17 @@ class NaviFragment : Fragment() {
             ) {
                 state.destination?.let { mapMarkersManager.showDestination(it.point) }
             }
+            // NaviViewModel's own RoutesObserver decides when replay actually starts; follow the
+            // camera only once that real transition happens instead of guessing with a timer.
+            if (lastObservedStatus != NavigationStatus.SIMULATING_DRIVE &&
+                state.status == NavigationStatus.SIMULATING_DRIVE
+            ) {
+                navigationCamera.requestNavigationCameraToFollowing {
+                    viewportDataSource.followingZoomPropertyOverride(17.0)
+                    viewportDataSource.evaluate()
+                }
+            }
+            lastObservedStatus = state.status
         }
     }
 
@@ -837,7 +835,7 @@ class NaviFragment : Fragment() {
 
             override fun afterTextChanged(value: Editable?) {
                 val query = value?.toString().orEmpty().trim()
-                updateSearchClearVisibility()
+                binding.searchClear.visibility = if (query.isEmpty()) View.GONE else View.VISIBLE
                 searchDebounceJob?.cancel()
                 if (query.length >= 2) {
                     naviViewModel.clearSuggestionDetails()
@@ -853,8 +851,9 @@ class NaviFragment : Fragment() {
         })
         binding.searchClear.setOnClickListener {
             binding.searchInput.text?.clear()
-            hideMainSearchPanel(clearResults = true)
             setActiveMainCategory(null)
+            binding.searchClear.visibility = View.GONE
+            hideMainSearchPanel(clearResults = true)
         }
         binding.mainDetailBack.setOnClickListener { showSuggestionList() }
         binding.mainDirections.setOnClickListener {
@@ -876,6 +875,18 @@ class NaviFragment : Fragment() {
         binding.navigateWorkShortcut.setOnClickListener { startSavedPlaceNavigation(SavedPlace.WORK) }
     }
 
+    private fun configureImeControlsVisibility() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            binding.mapControls.visibility = if (insets.isVisible(WindowInsetsCompat.Type.ime())) {
+                View.GONE
+            } else {
+                View.VISIBLE
+            }
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
+    }
+
     private fun searchNow(query: String) {
         val normalized = query.trim()
         if (normalized.length < 2) return
@@ -891,8 +902,8 @@ class NaviFragment : Fragment() {
         hideKeyboard()
         binding.searchInput.clearFocus()
         setActiveMainCategory(category)
+        binding.searchClear.visibility = View.VISIBLE
         renderSearchPanel(SearchPanelMode.SUGGESTIONS)
-        updateSearchClearVisibility()
         naviViewModel.clearSuggestionDetails()
         naviViewModel.searchNearby(category.code)
     }
@@ -936,7 +947,6 @@ class NaviFragment : Fragment() {
         binding.mainSearchPanel.showIf(mode != SearchPanelMode.HIDDEN)
         binding.mainSuggestionContent.showIf(mode == SearchPanelMode.SUGGESTIONS)
         binding.mainPlaceDetail.showIf(mode == SearchPanelMode.DETAIL)
-        updateSearchClearVisibility()
     }
 
     private fun bindMainPlaceDetail(
@@ -993,21 +1003,6 @@ class NaviFragment : Fragment() {
         naviViewModel.clearSuggestionDetails()
         if (clearResults) naviViewModel.clearSearch()
         mapMarkersManager.adjustMarkersForClosedCard()
-    }
-
-    /**
-     * A nearby category can open the result panel without populating the text field. Keep the
-     * normal clear action available until that panel is dismissed.
-     */
-    private fun updateSearchClearVisibility() {
-        binding.searchClear.visibility = if (
-            binding.searchInput.text?.isNotBlank() == true ||
-            binding.mainSearchPanel.visibility == View.VISIBLE
-        ) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
     }
 
     private fun showLabelChooser(suggestion: NavigationSuggestion) {
@@ -1118,7 +1113,7 @@ class NaviFragment : Fragment() {
     private fun hideKeyboard() {
         binding.searchInput.clearFocus()
         val inputMethodManager = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE)
-            as? InputMethodManager
+                as? InputMethodManager
         inputMethodManager?.hideSoftInputFromWindow(binding.searchInput.windowToken, 0)
     }
 
@@ -1163,8 +1158,8 @@ class NaviFragment : Fragment() {
         binding.routeProgressIndicator.progress = progress
 
         val currentSpeedKmh = (
-            (navigationLocationProvider.lastLocation?.speed ?: 0.0) * 3.6
-        ).roundToInt().coerceAtLeast(0)
+                (navigationLocationProvider.lastLocation?.speed ?: 0.0) * 3.6
+                ).roundToInt().coerceAtLeast(0)
         binding.currentSpeedText.text = "$currentSpeedKmh km/h"
 
         val durationRemaining = routeProgress.durationRemaining.toDouble()
@@ -1310,7 +1305,6 @@ class NaviFragment : Fragment() {
     }
 
     override fun onDestroyView() {
-        cancelPendingSimulation()
         jobResetToFlowing?.cancel()
         mockLocationUpdateJob?.cancel()
         searchDebounceJob?.cancel()

@@ -2,8 +2,11 @@ package com.fauto.car.navigation;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -20,8 +23,6 @@ import com.ivi.car.navigation.NaviAidlInterface;
 
 import java.io.PrintWriter;
 import java.util.Locale;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -41,9 +42,25 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private static final String NAVIGATION_APP_BIND_ACTION =
             "com.ivi.car.navigation.service.NaviAIDLService";
 
+    // ===== DEBUG TEST ONLY: adb broadcast entry point (remove before release) =====
+    // Registered only on userdebug/eng builds. This action is intentionally exported
+    // so `adb shell am broadcast` can reach this dynamic receiver.
+    private static final String ACTION_DEBUG_TEST =
+            "com.fauto.car.navigation.action.DEBUG_TEST";
+    private static final String EXTRA_DEBUG_COMMAND = "command";
+    private static final String EXTRA_DATA = "data";
+    private static final String EXTRA_DESTINATION = "destination";
+    private static final String EXTRA_CATEGORY = "category";
+    private static final String EXTRA_LIMIT = "limit";
+    private static final String EXTRA_SORT_BY = "sort_by";
+    private static final String EXTRA_SUGGESTION_ID = "suggestion_id";
+
     private Context mContext;
     private HandlerThread mHandlerThread;
     private Handler mEventHandler;
+    // DEBUG TEST ONLY: lifecycle state for the dynamic adb receiver.
+    private BroadcastReceiver mDebugReceiver;
+    private boolean mDebugReceiverRegistered;
 
     private final BinderInterfaceContainer<IFautoCarNavigationEventListener> mFAutoCarNavigation =
             new BinderInterfaceContainer<>();
@@ -69,7 +86,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private boolean mNavigationAppBound;
     private volatile boolean mReleased;
     private volatile String mLastNavigationAppStateJson;
-    private int mLastForwardedRouteState = FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE;
 
     private final INaviListener mNavigationAppListener = new INaviListener.Stub() {
         @Override
@@ -80,6 +96,26 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         @Override
         public void onNavigationStateChanged(String stateJson) {
             publishNavigationAppState(stateJson);
+        }
+
+        @Override
+        public void onCommandResult(String data) {
+            handleAppCommandEvent(data, false);
+        }
+
+        @Override
+        public void onCommandError(String data) {
+            handleAppCommandEvent(data, true);
+        }
+
+        @Override
+        public void onRouteChanged(String data) {
+            publishAppRouteChanged(data);
+        }
+
+        @Override
+        public void onSearchNearbyResult(String data) {
+            forwardSearchNearbyResult(data, mLastSearchCategory, mLastSearchLimit, mLastSearchSortedBy);
         }
     };
 
@@ -183,6 +219,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             return;
         }
         bindNavigationApp();
+        // DEBUG TEST ONLY: enables adb commands after the FAuto plugin is initialized.
+        registerDebugReceiver();
     }
 
     @Override
@@ -190,6 +228,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         Log.d(LOG_TAG, "release");
 
         mReleased = true;
+        // DEBUG TEST ONLY: never leave a context-registered receiver behind.
+        unregisterDebugReceiver();
         unbindNavigationApp();
 
         if (mHandlerThread != null) {
@@ -198,6 +238,90 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             mEventHandler = null;
         }
     }
+
+    // ===== DEBUG TEST ONLY: dynamic receiver and adb command dispatcher =====
+    // Keep this block together so it can be removed as one unit after integration testing.
+    private void registerDebugReceiver() {
+        if (!Build.IS_DEBUGGABLE || mDebugReceiverRegistered || mContext == null
+                || mEventHandler == null) {
+            return;
+        }
+
+        mDebugReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!ACTION_DEBUG_TEST.equals(intent.getAction())) {
+                    return;
+                }
+                runDebugCommand(intent);
+            }
+        };
+
+        IntentFilter filter = new IntentFilter(ACTION_DEBUG_TEST);
+        // This platform compiles against an API level before Android 13. The legacy
+        // overload is external/shell reachable and is sufficient for this userdebug test.
+        mContext.registerReceiver(mDebugReceiver, filter, null, mEventHandler);
+        mDebugReceiverRegistered = true;
+        Log.i(LOG_TAG, "Debug broadcast receiver registered");
+    }
+
+    private void unregisterDebugReceiver() {
+        if (!mDebugReceiverRegistered || mContext == null) {
+            return;
+        }
+        try {
+            mContext.unregisterReceiver(mDebugReceiver);
+        } catch (IllegalArgumentException error) {
+            Log.w(LOG_TAG, "Debug broadcast receiver was already unregistered", error);
+        }
+        mDebugReceiver = null;
+        mDebugReceiverRegistered = false;
+    }
+
+    private void runDebugCommand(Intent intent) {
+        String command = intent.getStringExtra(EXTRA_DEBUG_COMMAND);
+        if (command == null) {
+            Log.w(LOG_TAG, "DEBUG command is missing");
+            return;
+        }
+        try {
+            switch (command) {
+                case "turn_by_turn":
+                    sendDataTurnByTurn(intent.getStringExtra(EXTRA_DATA));
+                    Log.i(LOG_TAG, "DEBUG turn_by_turn dispatched");
+                    break;
+                case "set_route":
+                    Log.i(LOG_TAG, "DEBUG set_route result="
+                            + setRoute(intent.getStringExtra(EXTRA_DESTINATION)));
+                    break;
+                case "nearby":
+                    getSearchNearbyCategory(
+                            intent.getStringExtra(EXTRA_CATEGORY),
+                            intent.getIntExtra(EXTRA_LIMIT, 5),
+                            intent.getIntExtra(EXTRA_SORT_BY,
+                                    FAutoCarNavigationManager.SORT_BY_DISTANCE));
+                    Log.i(LOG_TAG, "DEBUG nearby dispatched");
+                    break;
+                case "select_suggestion":
+                    Log.i(LOG_TAG, "DEBUG select_suggestion result="
+                            + selectSuggestion(intent.getStringExtra(EXTRA_SUGGESTION_ID)));
+                    break;
+                case "home":
+                    Log.i(LOG_TAG, "DEBUG home result=" + startNavigatingHome());
+                    break;
+                case "state":
+                    Log.i(LOG_TAG, "DEBUG state=" + getNavigationState());
+                    break;
+                default:
+                    Log.w(LOG_TAG, "DEBUG unknown command=" + command);
+                    break;
+            }
+        } catch (RemoteException error) {
+            Log.e(LOG_TAG, "DEBUG command failed: " + command, error);
+        }
+    }
+
+    // ===== END DEBUG TEST ONLY =====
 
     private void bindNavigationApp() {
         if (mReleased || mContext == null) {
@@ -438,62 +562,15 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     api));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
-        Handler handler = mEventHandler;
-        if (handler == null) {
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Event handler is null",
-                    api));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-        if (Looper.myLooper() == handler.getLooper()) {
-            executeCommand(messageWhat, request);
-            return request.resultCode;
-        }
-        if (!handler.sendMessage(Message.obtain(handler, messageWhat, request))) {
-            handleError(buildErrorJson(
-                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation command could not be queued",
-                    api));
-            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
-        }
-        try {
-            if (!request.await(COMMAND_RESULT_TIMEOUT_MILLIS)) {
-                if (request.cancelIfPending()) {
-                    handler.removeMessages(messageWhat, request);
-                    handleError(buildErrorJson(
-                            FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
-                            "Navigation command timed out before execution",
-                            api));
-                    return FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
-                }
-                request.awaitCompletion();
-            }
-            return request.resultCode;
-        } catch (InterruptedException error) {
-            if (request.cancelIfPending()) {
-                handler.removeMessages(messageWhat, request);
-                Thread.currentThread().interrupt();
-                handleError(buildErrorJson(
-                        FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
-                        "Navigation command was interrupted before execution",
-                        api));
-                return FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
-            }
-
-            // The command has already started, so wait for the actual app result instead of
-            // returning an error while the command continues in the background.
-            while (true) {
-                try {
-                    request.awaitCompletion();
-                    break;
-                } catch (InterruptedException ignored) {
-                    // Keep waiting for the already-started command's actual result.
-                }
-            }
-            Thread.currentThread().interrupt();
-            return request.resultCode;
-        }
+        return BlockingCommandGateway.dispatch(
+                mEventHandler,
+                messageWhat,
+                request,
+                COMMAND_RESULT_TIMEOUT_MILLIS,
+                FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                this::executeCommand,
+                (resultCode, message) -> handleError(buildErrorJson(resultCode, message, api)));
     }
 
     private void executeCommand(int messageWhat, CommandRequest request) {
@@ -662,6 +739,12 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     "sendDataTurnByTurn"));
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
+        // buildErrorJson is a generic {api,resultCode,message} envelope, reused here for the
+        // success ack design item 10 requires.
+        handleResult(buildErrorJson(
+                FAutoCarNavigationManager.RESULT_OK,
+                "Turn-by-turn data delivered",
+                "sendDataTurnByTurn"));
         return FAutoCarNavigationManager.RESULT_OK;
     }
 
@@ -717,11 +800,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         mLastSearchLimit = limit;
         mLastSearchSortedBy = sortedBy;
         try {
-            String result = navigationApp.searchNearBy(
-                    appCategory,
-                    limit,
-                    mapSortToAppCode(sortedBy));
-            forwardSearchNearbyResult(result, category, limit, sortedBy);
+            // Fire-and-forget: the result arrives later via onSearchNearbyResult.
+            navigationApp.searchNearBy(appCategory, limit, mapSortToAppCode(sortedBy));
             return FAutoCarNavigationManager.RESULT_OK;
         } catch (RemoteException error) {
             Log.e(LOG_TAG, "searchNearBy RemoteException", error);
@@ -742,15 +822,22 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 // It is not a completion result for a plugin command.
                 return;
             }
-            if (!"navigation-command".equals(event.optString("channel"))) {
-                handleResult(data);
-                return;
-            }
+        } catch (JSONException ignored) {
+            // Opaque non-JSON payloads (e.g. echoed sendDataTurnByTurn input) are pass-through.
+        }
+        handleResult(data);
+    }
 
+    /** Shared parsing for the app's onCommandResult/onCommandError push. */
+    private void handleAppCommandEvent(String data, boolean isError) {
+        try {
+            JSONObject event = new JSONObject(data);
             String api = event.optString("api", "navigation");
             int appResultCode = event.optInt("resultCode", -7);
-            String message = event.optString("message", "Navigation command failed");
-            if ("ERROR".equals(event.optString("type"))) {
+            String message = event.optString(
+                    "message",
+                    isError ? "Navigation command failed" : "Navigation command succeeded");
+            if (isError) {
                 handleError(buildAppErrorJson(api, appResultCode, message));
                 return;
             }
@@ -765,9 +852,28 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 result.put("destination", destination);
             }
             handleResult(result.toString());
-        } catch (JSONException ignored) {
-            // Turn-by-turn data is intentionally opaque and must remain pass-through.
-            handleResult(data);
+        } catch (JSONException error) {
+            Log.e(LOG_TAG, "Invalid navigation command event", error);
+            if (isError) {
+                handleError(buildErrorJson(
+                        FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
+                        "Invalid navigation command event",
+                        "navigation"));
+            } else {
+                handleResult(data);
+            }
+        }
+    }
+
+    /** The app already owns the ROUTE_SET transition; just relay its destination. */
+    private void publishAppRouteChanged(String data) {
+        try {
+            JSONObject destination = new JSONObject(data);
+            String name = destination.optString("name", mLastDestination);
+            String suggestionId = destination.optString("suggestionId", mLastSuggestionId);
+            handleRouteChanged(buildRouteDataJson(name, suggestionId));
+        } catch (JSONException error) {
+            Log.e(LOG_TAG, "Invalid route changed payload", error);
         }
     }
 
@@ -828,12 +934,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             pluginState.put("appState", appState);
             mLastNavigationAppStateJson = pluginState.toString();
             handleNavigationStateChanged(mLastNavigationAppStateJson);
-
-            if (state == FAutoCarNavigationManager.NAVIGATION_STATE_ROUTE_SET
-                    && state != mLastForwardedRouteState) {
-                handleRouteChanged(buildRouteDataJson(mLastDestination, mLastSuggestionId));
-            }
-            mLastForwardedRouteState = state;
         } catch (JSONException error) {
             Log.e(LOG_TAG, "Invalid navigation app state", error);
             publishUnavailableState("Navigation app returned an invalid state");
@@ -873,7 +973,6 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
     private void publishUnavailableState(String message) {
         mNavigationState = FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE;
-        mLastForwardedRouteState = FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE;
         mLastNavigationAppStateJson = buildNavigationStateJson();
         handleNavigationStateChanged(mLastNavigationAppStateJson);
         if (!isEmpty(message)) {
@@ -989,10 +1088,21 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
+    /**
+     * The board's legacy FAuto base library exposes getInterfaces() as a raw Iterable.
+     * Keep the unchecked boundary here so callback code remains strongly typed.
+     */
+    @SuppressWarnings("unchecked")
+    private Iterable<BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener>>
+            getNavigationCallbacks() {
+        return (Iterable<BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener>>)
+                (Iterable<?>) mFAutoCarNavigation.getInterfaces();
+    }
+
     private void handleResult(String message) {
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
-                    : mFAutoCarNavigation.getInterfaces()) {
+                    : getNavigationCallbacks()) {
                 cb.binderInterface.onResult(message);
             }
         } catch (Exception e) {
@@ -1003,7 +1113,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleError(String message) {
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
-                    : mFAutoCarNavigation.getInterfaces()) {
+                    : getNavigationCallbacks()) {
                 cb.binderInterface.onError(message);
             }
         } catch (Exception e) {
@@ -1014,7 +1124,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleSearchNearByDataToClient(String data) {
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
-                    : mFAutoCarNavigation.getInterfaces()) {
+                    : getNavigationCallbacks()) {
                 cb.binderInterface.onSearchNearByCategory(data);
             }
         } catch (Exception e) {
@@ -1025,7 +1135,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleNavigationStateChanged(String data) {
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
-                    : mFAutoCarNavigation.getInterfaces()) {
+                    : getNavigationCallbacks()) {
                 cb.binderInterface.onNavigationStateChanged(data);
             }
         } catch (Exception e) {
@@ -1038,7 +1148,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleRouteChanged(String data) {
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
-                    : mFAutoCarNavigation.getInterfaces()) {
+                    : getNavigationCallbacks()) {
                 cb.binderInterface.onRouteChanged(data);
             }
         } catch (Exception e) {
@@ -1047,57 +1157,37 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     }
 
     private String buildNavigationStateJson() {
-        return "{"
-                + "\"state\":" + mNavigationState + ","
-                + "\"stateName\":\"" + getNavigationStateName(mNavigationState) + "\","
-                + "\"destination\":\"" + safeJson(mLastDestination) + "\","
-                + "\"suggestionId\":\"" + safeJson(mLastSuggestionId) + "\","
-                + "\"lastSearchCategory\":\"" + safeJson(mLastSearchCategory) + "\","
-                + "\"lastSearchLimit\":" + mLastSearchLimit + ","
-                + "\"lastSearchSortedBy\":" + mLastSearchSortedBy + ","
-                + "\"lastSearchSortedByName\":\"" + getSortByName(mLastSearchSortedBy) + "\""
-                + "}";
+        return PluginJson.navigationState(
+                mNavigationState,
+                getNavigationStateName(mNavigationState),
+                mLastDestination,
+                mLastSuggestionId,
+                mLastSearchCategory,
+                mLastSearchLimit,
+                mLastSearchSortedBy,
+                getSortByName(mLastSearchSortedBy));
     }
 
     private String buildRouteDataJson(String destination, String suggestionId) {
-        return "{"
-                + "\"api\":\"route\","
-                + "\"destination\":\"" + safeJson(destination) + "\","
-                + "\"suggestionId\":\"" + safeJson(suggestionId) + "\","
-                + "\"state\":" + mNavigationState + ","
-                + "\"stateName\":\"" + getNavigationStateName(mNavigationState) + "\""
-                + "}";
+        return PluginJson.routeData(
+                destination, suggestionId, mNavigationState, getNavigationStateName(mNavigationState));
     }
 
     private String buildErrorJson(int code, String message, String api) {
-        return "{"
-                + "\"api\":\"" + safeJson(api) + "\","
-                + "\"resultCode\":" + code + ","
-                + "\"message\":\"" + safeJson(message) + "\""
-                + "}";
+        return PluginJson.errorJson(code, message, api);
     }
 
     private String buildUnavailableStateJson() {
-        return "{"
-                + "\"state\":" + FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE + ","
-                + "\"stateName\":\"UNAVAILABLE\","
-                + "\"destination\":\"\","
-                + "\"suggestionId\":\"\","
-                + "\"lastSearchCategory\":\"" + safeJson(mLastSearchCategory) + "\","
-                + "\"lastSearchLimit\":" + mLastSearchLimit + ","
-                + "\"lastSearchSortedBy\":" + mLastSearchSortedBy + ","
-                + "\"lastSearchSortedByName\":\""
-                + getSortByName(mLastSearchSortedBy) + "\""
-                + "}";
+        return PluginJson.unavailableState(
+                FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE,
+                mLastSearchCategory,
+                mLastSearchLimit,
+                mLastSearchSortedBy,
+                getSortByName(mLastSearchSortedBy));
     }
 
     private String buildAppErrorJson(String api, int appResultCode, String message) {
-        return "{"
-                + "\"api\":\"" + safeJson(api) + "\","
-                + "\"resultCode\":" + mapAppResultCode(appResultCode) + ","
-                + "\"appResultCode\":" + appResultCode + ","
-                + "\"message\":\"" + safeJson(message) + "\""
-                + "}";
+        return PluginJson.appErrorJson(api, appResultCode, mapAppResultCode(appResultCode), message);
     }
 
     private String getNavigationStateName(int state) {
@@ -1141,90 +1231,4 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         return value == null || value.trim().isEmpty();
     }
 
-    private String safeJson(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private static final class CommandRequest {
-        private enum State {
-            PENDING,
-            RUNNING,
-            COMPLETED,
-            CANCELLED
-        }
-
-        private final String stringValue;
-        private final int intValue;
-        private final CountDownLatch completed = new CountDownLatch(1);
-        private volatile int resultCode = FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
-        private State state = State.PENDING;
-
-        private CommandRequest(String stringValue, int intValue) {
-            this.stringValue = stringValue;
-            this.intValue = intValue;
-        }
-
-        static CommandRequest forString(String value) {
-            return new CommandRequest(value, 0);
-        }
-
-        static CommandRequest forInt(int value) {
-            return new CommandRequest(null, value);
-        }
-
-        static CommandRequest empty() {
-            return new CommandRequest(null, 0);
-        }
-
-        synchronized boolean tryStart() {
-            if (state != State.PENDING) {
-                return false;
-            }
-            state = State.RUNNING;
-            return true;
-        }
-
-        synchronized boolean cancelIfPending() {
-            if (state != State.PENDING) {
-                return false;
-            }
-            state = State.CANCELLED;
-            return true;
-        }
-
-        void complete(int result) {
-            if (!finish(result)) {
-                return;
-            }
-            completed.countDown();
-        }
-
-        void fail(int result) {
-            if (!finish(result)) {
-                return;
-            }
-            completed.countDown();
-        }
-
-        private synchronized boolean finish(int result) {
-            if (state == State.COMPLETED || state == State.CANCELLED) {
-                return false;
-            }
-            resultCode = result;
-            state = State.COMPLETED;
-            return true;
-        }
-
-        boolean await(long timeoutMillis) throws InterruptedException {
-            return completed.await(timeoutMillis, TimeUnit.MILLISECONDS);
-        }
-
-        void awaitCompletion() throws InterruptedException {
-            completed.await();
-        }
-    }
 }

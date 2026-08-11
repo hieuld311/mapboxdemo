@@ -120,7 +120,7 @@ class SurfaceDownscaler(
         }
     }
 
-     fun onTick(): Long {
+    fun onTick(): Long {
         val startTimeAll = System.currentTimeMillis()
         val image = recentImage.getAndSet(null)
         if (image != null) {

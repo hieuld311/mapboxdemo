@@ -5,6 +5,7 @@ import com.ivi.car.navigation.model.NavigationSuggestion
 import com.ivi.car.navigation.model.NavigationResultCode
 import com.ivi.car.navigation.model.NearbyCategory
 import com.ivi.car.navigation.model.SuggestionSort
+import com.ivi.car.navigation.util.GeoUtils
 import com.mapbox.geojson.Point
 import com.mapbox.search.autocomplete.PlaceAutocomplete
 import com.mapbox.search.autocomplete.PlaceAutocompleteOptions
@@ -16,10 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.charset.StandardCharsets
 import java.util.UUID
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 class NavigationSearchRepository(
     private val tripadvisorRepository: TripadvisorRepository
@@ -111,7 +108,7 @@ class NavigationSearchRepository(
                 point = coordinate,
                 category = null,
                 distanceMeters = suggestion.distanceMeters ?: origin?.let {
-                    haversineMeters(it, coordinate)
+                    GeoUtils.haversineMeters(it, coordinate)
                 },
                 rating = null,
                 reviewCount = null,
@@ -138,7 +135,7 @@ class NavigationSearchRepository(
         )
     }
 
-    private fun resolveSuggestionCoordinate(
+    private suspend fun resolveSuggestionCoordinate(
         suggestion: PlaceAutocompleteSuggestion
     ): Point? {
         suggestion.coordinate?.let { return it }
@@ -219,7 +216,7 @@ class NavigationSearchRepository(
                 address = result.address.formattedAddress,
                 point = result.coordinate,
                 category = category,
-                distanceMeters = haversineMeters(origin, result.coordinate),
+                distanceMeters = GeoUtils.haversineMeters(origin, result.coordinate),
                 rating = null,
                 reviewCount = null,
                 ratingSource = null,
@@ -258,18 +255,6 @@ class NavigationSearchRepository(
             candidates = sorted.take(safeLimit),
             message = if (sorted.isEmpty()) "No nearby candidates found" else null
         )
-    }
-
-    private fun haversineMeters(first: Point, second: Point): Double {
-        val earthRadiusMeters = 6_371_000.0
-        val firstLatitude = Math.toRadians(first.latitude())
-        val secondLatitude = Math.toRadians(second.latitude())
-        val latitudeDelta = secondLatitude - firstLatitude
-        val longitudeDelta = Math.toRadians(second.longitude() - first.longitude())
-        val a = sin(latitudeDelta / 2) * sin(latitudeDelta / 2) +
-            cos(firstLatitude) * cos(secondLatitude) *
-            sin(longitudeDelta / 2) * sin(longitudeDelta / 2)
-        return earthRadiusMeters * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
 
     companion object {

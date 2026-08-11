@@ -3,6 +3,7 @@ package com.ivi.car.navigation.repository
 import android.content.Context
 import com.ivi.car.navigation.model.NavigationSuggestion
 import com.ivi.car.navigation.model.NearbyCategory
+import com.ivi.car.navigation.util.GeoUtils
 import com.mapbox.geojson.Point
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -14,10 +15,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 class TripadvisorRepository(
     private val context: Context
@@ -78,7 +75,7 @@ class TripadvisorRepository(
                 coordinates.getDouble("longitude"),
                 coordinates.getDouble("latitude")
             )
-            val distance = haversineMeters(suggestion.point, point)
+            val distance = GeoUtils.haversineMeters(suggestion.point, point)
             if (distance <= MAX_MATCH_DISTANCE_METERS &&
                 (bestMatch == null || distance < requireNotNull(bestMatch).second)
             ) {
@@ -195,18 +192,6 @@ class TripadvisorRepository(
 
     private fun String.withTripadvisorSource(): String =
         if (contains(SOURCE_TRIPADVISOR)) this else "$this+$SOURCE_TRIPADVISOR"
-
-    private fun haversineMeters(first: Point, second: Point): Double {
-        val earthRadiusMeters = 6_371_000.0
-        val firstLatitude = Math.toRadians(first.latitude())
-        val secondLatitude = Math.toRadians(second.latitude())
-        val latitudeDelta = secondLatitude - firstLatitude
-        val longitudeDelta = Math.toRadians(second.longitude() - first.longitude())
-        val a = sin(latitudeDelta / 2) * sin(latitudeDelta / 2) +
-            cos(firstLatitude) * cos(secondLatitude) *
-            sin(longitudeDelta / 2) * sin(longitudeDelta / 2)
-        return earthRadiusMeters * 2 * atan2(sqrt(a), sqrt(1 - a))
-    }
 
     companion object {
         private const val BASE_URL = "https://terra.tripadvisor.com/api"

@@ -4,16 +4,20 @@ package com.ivi.car.navigation;
 import com.ivi.car.navigation.INaviListener;
 
 interface NaviAidlInterface {
-    void registerListener(INaviListener listener);
-    void unregisterListener(INaviListener listener);
-    void sendNaviData(String data);
+    /**
+     * Demonstrates some basic types that you can use as parameters
+     * and return values in AIDL.
+     */
+     void registerListener(INaviListener listener);
+     void unregisterListener(INaviListener listener);
+     void sendNaviData(String data);
 
     int setRoute(String destination);
     // limit <= 0 uses the application default (5); sortBy == 0 means unspecified.
-    String searchNearBy(int category, int limit, int sortBy);
+    // Result arrives asynchronously via INaviListener.onSearchNearbyResult.
+    oneway void searchNearBy(int category, int limit, int sortBy);
     int selectSuggestion(String suggestionId);
     String getNavigationState();
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // int setNavigationDemoMode(int mode);
+//    int setNavigationDemoMode(int mode);
     int startNavigatingHome();
 }
