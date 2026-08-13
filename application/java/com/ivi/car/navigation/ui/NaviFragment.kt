@@ -1,9 +1,7 @@
 package com.ivi.car.navigation.ui
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Base64
 import android.content.ComponentName
 import android.content.SharedPreferences
 import android.content.Context
@@ -125,11 +123,8 @@ import fauto.car.sharedata.FAutoShareDataManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.util.Locale
 import javax.inject.Inject
@@ -202,8 +197,6 @@ class NaviFragment : Fragment() {
     private var mockLocationUpdateJob: Job? = null
     private var searchDebounceJob: Job? = null
     private var photoLoadJob: Job? = null
-    private var mapSnapshotJob: Job? = null
-    private var mapSnapshotCaptureInFlight = false
     private var mainSelectedSuggestionId: String? = null
     private val pixelDensity = Resources.getSystem().displayMetrics.density
     private val overviewPadding: EdgeInsets by lazy {
@@ -388,82 +381,9 @@ class NaviFragment : Fragment() {
         mFAutoShareDataManager?.onNaviDataReceived(navData)
     }
 
-    private fun startMapSnapshotLoop() {
-        if (mapSnapshotJob?.isActive == true) {
-            return
-        }
-        mapSnapshotJob = viewLifecycleOwner.lifecycleScope.launch {
-            while (isActive) {
-                captureMapSnapshot()
-                val status = NavigationManager.state.value.status
-                val intervalMs = if (status == NavigationStatus.SIMULATING_DRIVE ||
-                    status == NavigationStatus.ROUTE_SET
-                ) {
-                    MAP_SNAPSHOT_ACTIVE_INTERVAL_MS
-                } else {
-                    MAP_SNAPSHOT_IDLE_INTERVAL_MS
-                }
-                delay(intervalMs)
-            }
-        }
-    }
-
-    private fun stopMapSnapshotLoop() {
-        mapSnapshotJob?.cancel()
-        mapSnapshotJob = null
-        mapSnapshotCaptureInFlight = false
-    }
-
-    private fun captureMapSnapshot() {
-        if (mapSnapshotCaptureInFlight || _binding == null) {
-            return
-        }
-        mapSnapshotCaptureInFlight = true
-        binding.mapView.snapshot { bitmap ->
-            mapSnapshotCaptureInFlight = false
-            if (bitmap == null) {
-                return@snapshot
-            }
-            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
-                runCatching { publishMapSnapshot(bitmap) }
-                    .onFailure { error -> Log.w(TAG, "publishMapSnapshot failed", error) }
-            }
-        }
-    }
-
-    private suspend fun publishMapSnapshot(source: Bitmap) {
-        val scaled = try {
-            Bitmap.createScaledBitmap(
-                source, MAP_SNAPSHOT_WIDTH_PX, MAP_SNAPSHOT_HEIGHT_PX, true
-            )
-        } finally {
-            if (!source.isRecycled) {
-                source.recycle()
-            }
-        }
-        val jpegBytes = ByteArrayOutputStream().use { stream ->
-            scaled.compress(Bitmap.CompressFormat.JPEG, MAP_SNAPSHOT_JPEG_QUALITY, stream)
-            stream.toByteArray()
-        }
-        if (scaled !== source && !scaled.isRecycled) {
-            scaled.recycle()
-        }
-        val payload = JSONObject()
-            .put("channel", "map-snapshot")
-            .put("format", "jpeg")
-            .put("width", MAP_SNAPSHOT_WIDTH_PX)
-            .put("height", MAP_SNAPSHOT_HEIGHT_PX)
-            .put("data", Base64.encodeToString(jpegBytes, Base64.NO_WRAP))
-            .toString()
-        withContext(Dispatchers.Main) {
-            naviAIDL?.sendNaviData(payload)
-        }
-    }
-
     override fun onPause() {
         super.onPause()
         Log.i(TAG,"onPause()")
-        stopMapSnapshotLoop()
     }
 
     override fun onStop() {
@@ -654,7 +574,6 @@ class NaviFragment : Fragment() {
         viewportDataSource.evaluate()
         naviViewModel.connectService()
         audioViewModel.connectService()
-        startMapSnapshotLoop()
     }
 
     private fun initView() {
@@ -1512,11 +1431,6 @@ class NaviFragment : Fragment() {
         val MARKERS_BOTTOM_OFFSET = 176.0
         val MARKERS_EDGE_OFFSET = 64.0
         val PLACE_CARD_HEIGHT = 300.0
-        const val MAP_SNAPSHOT_WIDTH_PX = 400
-        const val MAP_SNAPSHOT_HEIGHT_PX = 284
-        const val MAP_SNAPSHOT_JPEG_QUALITY = 70
-        const val MAP_SNAPSHOT_ACTIVE_INTERVAL_MS = 2_000L
-        const val MAP_SNAPSHOT_IDLE_INTERVAL_MS = 8_000L
 
         val MARKERS_INSETS = EdgeInsets(
             MARKERS_EDGE_OFFSET, MARKERS_EDGE_OFFSET, MARKERS_BOTTOM_OFFSET, MARKERS_EDGE_OFFSET
