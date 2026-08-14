@@ -20,8 +20,20 @@ import fauto.car.base.FAutoCarManagerBase;
 public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     private static final String LOG_TAG = "FAutoCarNavigationManager";
 
-    public static final String NAVIGATION_SERVICE =
-            "com.fauto.car.navigation.FAutoCarNavigationService";
+    // API name literals reused across the "service is unavailable" / "connection failed"
+    // dispatchLocalError(...) calls for each public method below.
+    private static final String API_SEND_DATA_TURN_BY_TURN = "sendDataTurnByTurn";
+    private static final String API_GET_SEARCH_NEARBY_CATEGORY = "getSearchNearbyCategory";
+    private static final String API_SET_ROUTE = "setRoute";
+    private static final String API_SELECT_SUGGESTION = "selectSuggestion";
+    private static final String API_START_NAVIGATING_HOME = "startNavigatingHome";
+
+    // Error message literals reused across multiple public methods' failure paths.
+    private static final String MESSAGE_SERVICE_UNAVAILABLE = "Navigation service is unavailable";
+    private static final String MESSAGE_SERVICE_CONNECTION_FAILED =
+            "Navigation service connection failed";
+
+    public static final String NAVIGATION_SERVICE = "navigation_service";
 
     public static final String PERMISSION_NAVIGATION =
             "fauto.car.permission.NAVIGATION";
@@ -159,12 +171,12 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     public void sendDataTurnByTurn(@NonNull String data) {
         if (mService == null) {
             Log.w(LOG_TAG, "sendDataTurnByTurn ignored: service is null");
-            dispatchLocalError(ERROR_UNAVAILABLE, "sendDataTurnByTurn", "Navigation service is unavailable");
+            dispatchLocalError(ERROR_UNAVAILABLE, API_SEND_DATA_TURN_BY_TURN, MESSAGE_SERVICE_UNAVAILABLE);
             return;
         }
 
         if (data == null || data.trim().isEmpty()) {
-            dispatchLocalError(ERROR_VALUE_INVALID, "sendDataTurnByTurn", "Turn-by-turn data is empty");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_SEND_DATA_TURN_BY_TURN, "Turn-by-turn data is empty");
             return;
         }
 
@@ -172,7 +184,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             mService.sendDataTurnByTurn(data);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "sendDataTurnByTurn RemoteException", e);
-            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "sendDataTurnByTurn", "Navigation service connection failed");
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, API_SEND_DATA_TURN_BY_TURN, MESSAGE_SERVICE_CONNECTION_FAILED);
         }
     }
 
@@ -184,25 +196,25 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     ) {
         if (mService == null) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: service is null");
-            dispatchLocalError(ERROR_UNAVAILABLE, "getSearchNearbyCategory", "Navigation service is unavailable");
+            dispatchLocalError(ERROR_UNAVAILABLE, API_GET_SEARCH_NEARBY_CATEGORY, MESSAGE_SERVICE_UNAVAILABLE);
             return;
         }
 
         if (category == null || category.trim().isEmpty()) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: category is empty");
-            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Category is empty");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_GET_SEARCH_NEARBY_CATEGORY, "Category is empty");
             return;
         }
 
         if (limit <= 0) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: invalid limit=" + limit);
-            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Limit must be greater than zero");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_GET_SEARCH_NEARBY_CATEGORY, "Limit must be greater than zero");
             return;
         }
 
         if (!isValidSortBy(sortedBy)) {
             Log.w(LOG_TAG, "getSearchNearbyCategory ignored: invalid sortedBy=" + sortedBy);
-            dispatchLocalError(ERROR_VALUE_INVALID, "getSearchNearbyCategory", "Invalid sort mode");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_GET_SEARCH_NEARBY_CATEGORY, "Invalid sort mode");
             return;
         }
 
@@ -210,19 +222,19 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             mService.getSearchNearbyCategory(category, limit, sortedBy);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "getSearchNearbyCategory RemoteException", e);
-            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "getSearchNearbyCategory", "Navigation service connection failed");
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, API_GET_SEARCH_NEARBY_CATEGORY, MESSAGE_SERVICE_CONNECTION_FAILED);
         }
     }
 
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int setRoute(@NonNull String destination) {
         if (mService == null) {
-            dispatchLocalError(ERROR_UNAVAILABLE, "setRoute", "Navigation service is unavailable");
+            dispatchLocalError(ERROR_UNAVAILABLE, API_SET_ROUTE, MESSAGE_SERVICE_UNAVAILABLE);
             return ERROR_UNAVAILABLE;
         }
 
         if (destination == null || destination.trim().isEmpty()) {
-            dispatchLocalError(ERROR_VALUE_INVALID, "setRoute", "Destination is empty");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_SET_ROUTE, "Destination is empty");
             return ERROR_VALUE_INVALID;
         }
 
@@ -230,7 +242,7 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             return mService.setRoute(destination);
         } catch (RemoteException e) {
             Log.e(LOG_TAG, "setRoute RemoteException", e);
-            dispatchLocalError(ERROR_REMOTE_EXCEPTION, "setRoute", "Navigation service connection failed");
+            dispatchLocalError(ERROR_REMOTE_EXCEPTION, API_SET_ROUTE, MESSAGE_SERVICE_CONNECTION_FAILED);
             return ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -238,12 +250,12 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
     @RequiresPermission(PERMISSION_CONTROL_NAVIGATION)
     public @NavigationResultCode int selectSuggestion(@NonNull String suggestionId) {
         if (mService == null) {
-            dispatchLocalError(ERROR_UNAVAILABLE, "selectSuggestion", "Navigation service is unavailable");
+            dispatchLocalError(ERROR_UNAVAILABLE, API_SELECT_SUGGESTION, MESSAGE_SERVICE_UNAVAILABLE);
             return ERROR_UNAVAILABLE;
         }
 
         if (suggestionId == null || suggestionId.trim().isEmpty()) {
-            dispatchLocalError(ERROR_VALUE_INVALID, "selectSuggestion", "Suggestion id is empty");
+            dispatchLocalError(ERROR_VALUE_INVALID, API_SELECT_SUGGESTION, "Suggestion id is empty");
             return ERROR_VALUE_INVALID;
         }
 
@@ -253,8 +265,8 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             Log.e(LOG_TAG, "selectSuggestion RemoteException", e);
             dispatchLocalError(
                     ERROR_REMOTE_EXCEPTION,
-                    "selectSuggestion",
-                    "Navigation service connection failed");
+                    API_SELECT_SUGGESTION,
+                    MESSAGE_SERVICE_CONNECTION_FAILED);
             return ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -282,8 +294,8 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
         if (mService == null) {
             dispatchLocalError(
                     ERROR_UNAVAILABLE,
-                    "startNavigatingHome",
-                    "Navigation service is unavailable");
+                    API_START_NAVIGATING_HOME,
+                    MESSAGE_SERVICE_UNAVAILABLE);
             return ERROR_UNAVAILABLE;
         }
 
@@ -293,8 +305,8 @@ public class FAutoCarNavigationManager implements FAutoCarManagerBase {
             Log.e(LOG_TAG, "startNavigatingHome RemoteException", e);
             dispatchLocalError(
                     ERROR_REMOTE_EXCEPTION,
-                    "startNavigatingHome",
-                    "Navigation service connection failed");
+                    API_START_NAVIGATING_HOME,
+                    MESSAGE_SERVICE_CONNECTION_FAILED);
             return ERROR_REMOTE_EXCEPTION;
         }
     }

@@ -65,7 +65,15 @@ final class BlockingCommandGateway {
 
             // The command has already started, so wait for the actual app result instead of
             // returning an error while the command continues in the background.
-            while (true) {
+            //
+            // Sonar (S2142) flags the inner catch below for not immediately re-asserting the
+            // interrupt status. That is intentional here, not an oversight: re-interrupting
+            // inside this loop would make request.awaitCompletion() throw InterruptedException
+            // again on the very next iteration, turning this into a busy-spin loop instead of a
+            // blocking wait. The interrupt flag is preserved and restored exactly once, on the
+            // single Thread.currentThread().interrupt() call below, after the already-started
+            // command's real result is known. Do not "fix" this per the generic rule suggestion.
+            while (true) { //NOSONAR - see justification above; re-interrupting per-iteration would busy-spin
                 try {
                     request.awaitCompletion();
                     break;

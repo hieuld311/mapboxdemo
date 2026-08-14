@@ -74,6 +74,42 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     public static final int MSG_ON_START_NAVIGATING_HOME = 0xA005;
     private static final long COMMAND_RESULT_TIMEOUT_MILLIS = 5_000L;
 
+    // API name literals reused across validation/error/result envelopes and command routing.
+    private static final String API_SET_ROUTE = "setRoute";
+    private static final String API_SELECT_SUGGESTION = "selectSuggestion";
+    private static final String API_START_NAVIGATING_HOME = "startNavigatingHome";
+    private static final String API_GET_SEARCH_NEARBY_CATEGORY = "getSearchNearbyCategory";
+    private static final String API_SEND_DATA_TURN_BY_TURN = "sendDataTurnByTurn";
+    private static final String API_NAVIGATION_FALLBACK = "navigation";
+
+    // Error/status message literals reused across multiple failure paths.
+    private static final String MESSAGE_APP_UNAVAILABLE = "Navigation app is unavailable";
+    private static final String MESSAGE_COMMAND_FAILED = "Navigation command failed";
+    private static final String MESSAGE_SERVICE_RELEASED = "Navigation service is released";
+    private static final String MESSAGE_APP_CONNECTION_FAILED = "Navigation app connection failed";
+
+    // JSON field-name literals used when parsing app events / building plugin payloads.
+    // Kept separate from the DEBUG-only EXTRA_* intent-extra keys above even though a few
+    // share the same text today: those are ADB debug-broadcast keys, these are the plugin's
+    // outgoing/incoming wire field names, and the two contracts are free to diverge.
+    private static final String JSON_KEY_API = "api";
+    private static final String JSON_KEY_STATE = "state";
+    private static final String JSON_KEY_STATE_NAME = "stateName";
+    private static final String JSON_KEY_DESTINATION = "destination";
+    private static final String JSON_KEY_SUGGESTION_ID = "suggestionId";
+    private static final String JSON_KEY_RESULT_CODE = "resultCode";
+    private static final String JSON_KEY_APP_RESULT_CODE = "appResultCode";
+    private static final String JSON_KEY_MESSAGE = "message";
+    private static final String JSON_KEY_CATEGORY = "category";
+    private static final String JSON_KEY_LIMIT = "limit";
+    private static final String JSON_KEY_CANDIDATES = "candidates";
+
+    // The app's "status" vocabulary and the plugin's own stateName output both use this
+    // literal for the same concept (mapAppState translates the app's UNAVAILABLE status to
+    // NAVIGATION_STATE_UNAVAILABLE, whose display name is this same string), so one shared
+    // constant is safe here, unlike the EXTRA_* case above.
+    private static final String STATUS_UNAVAILABLE = "UNAVAILABLE";
+
     private int mNavigationState = FAutoCarNavigationManager.NAVIGATION_STATE_IDLE;
 
     private String mLastDestination = "";
@@ -196,7 +232,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     request.fail(FAutoCarNavigationManager.ERROR_OPERATION_FAILED);
                     handleError(buildErrorJson(
                             FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
-                            "Navigation command failed",
+                            MESSAGE_COMMAND_FAILED,
                             getApiNameForMessage(msg.what)));
                 }
             }
@@ -353,7 +389,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 return;
             }
             if (!bound) {
-                publishUnavailableState("Navigation app is unavailable");
+                publishUnavailableState(MESSAGE_APP_UNAVAILABLE);
             }
         } catch (SecurityException error) {
             Log.e(LOG_TAG, "Unable to bind navigation app", error);
@@ -416,6 +452,9 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         return FAutoCarNavigationManager.PERMISSION_NAVIGATION;
     }
 
+    // Intentional no-op: this service exposes no additional dumpsys diagnostics today.
+    // Left as an explicit empty override (rather than omitted) to document that choice and
+    // keep the FAutoCarServiceBase contract satisfied; not a placeholder for missed logic.
     @Override
     public void dump(PrintWriter printWriter) {
     }
@@ -458,7 +497,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
                     "Event handler is null",
-                    "sendDataTurnByTurn"));
+                    API_SEND_DATA_TURN_BY_TURN));
             return;
         }
 
@@ -473,7 +512,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
                     "Event handler is null",
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return;
         }
 
@@ -495,14 +534,14 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Destination is empty",
-                    "setRoute"));
+                    API_SET_ROUTE));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
         return dispatchCommand(
                 MSG_ON_SET_ROUTE,
                 CommandRequest.forString(destination),
-                "setRoute");
+                API_SET_ROUTE);
     }
 
     @Override
@@ -513,14 +552,14 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Suggestion id is empty",
-                    "selectSuggestion"));
+                    API_SELECT_SUGGESTION));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
         return dispatchCommand(
                 MSG_ON_SELECT_SUGGESTION,
                 CommandRequest.forString(suggestionId),
-                "selectSuggestion");
+                API_SELECT_SUGGESTION);
     }
 
     @Override
@@ -546,19 +585,19 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
 
     @Override
     public int startNavigatingHome() throws RemoteException {
-        Log.i(LOG_TAG, "startNavigatingHome");
+        Log.i(LOG_TAG, API_START_NAVIGATING_HOME);
 
         return dispatchCommand(
                 MSG_ON_START_NAVIGATING_HOME,
                 CommandRequest.empty(),
-                "startNavigatingHome");
+                API_START_NAVIGATING_HOME);
     }
 
     private int dispatchCommand(int messageWhat, CommandRequest request, String api) {
         if (mReleased) {
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation service is released",
+                    MESSAGE_SERVICE_RELEASED,
                     api));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
@@ -578,7 +617,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             request.fail(FAutoCarNavigationManager.ERROR_UNAVAILABLE);
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation service is released",
+                    MESSAGE_SERVICE_RELEASED,
                     getApiNameForMessage(messageWhat)));
             return;
         }
@@ -605,11 +644,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     break;
             }
         } catch (Exception error) {
-            Log.e(LOG_TAG, "Navigation command failed", error);
+            Log.e(LOG_TAG, MESSAGE_COMMAND_FAILED, error);
             request.fail(FAutoCarNavigationManager.ERROR_OPERATION_FAILED);
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
-                    "Navigation command failed",
+                    MESSAGE_COMMAND_FAILED,
                     getApiNameForMessage(messageWhat)));
         }
     }
@@ -617,13 +656,13 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private static String getApiNameForMessage(int messageWhat) {
         switch (messageWhat) {
             case MSG_ON_SET_ROUTE:
-                return "setRoute";
+                return API_SET_ROUTE;
             case MSG_ON_SELECT_SUGGESTION:
-                return "selectSuggestion";
+                return API_SELECT_SUGGESTION;
             case MSG_ON_START_NAVIGATING_HOME:
-                return "startNavigatingHome";
+                return API_START_NAVIGATING_HOME;
             default:
-                return "navigation";
+                return API_NAVIGATION_FALLBACK;
         }
     }
 
@@ -635,7 +674,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         request.fail(FAutoCarNavigationManager.ERROR_UNAVAILABLE);
         handleError(buildErrorJson(
                 FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                "Navigation service is released",
+                MESSAGE_SERVICE_RELEASED,
                 getApiNameForMessage(message.what)));
     }
 
@@ -645,18 +684,18 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "setRoute"));
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_SET_ROUTE));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
         try {
             int appResult = navigationApp.setRoute(destination);
             if (appResult != 0) {
-                handleAppCommandError("setRoute", appResult);
+                handleAppCommandError(API_SET_ROUTE, appResult);
             }
             return mapAppResultCode(appResult);
         } catch (RemoteException error) {
-            handleAppRemoteException("setRoute", error);
+            handleAppRemoteException(API_SET_ROUTE, error);
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -667,18 +706,18 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "selectSuggestion"));
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_SELECT_SUGGESTION));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
         try {
             int appResult = navigationApp.selectSuggestion(suggestionId);
             if (appResult != 0) {
-                handleAppCommandError("selectSuggestion", appResult);
+                handleAppCommandError(API_SELECT_SUGGESTION, appResult);
             }
             return mapAppResultCode(appResult);
         } catch (RemoteException error) {
-            handleAppRemoteException("selectSuggestion", error);
+            handleAppRemoteException(API_SELECT_SUGGESTION, error);
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -691,18 +730,18 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "startNavigatingHome"));
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_START_NAVIGATING_HOME));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
         try {
             int appResult = navigationApp.startNavigatingHome();
             if (appResult != 0) {
-                handleAppCommandError("startNavigatingHome", appResult);
+                handleAppCommandError(API_START_NAVIGATING_HOME, appResult);
             }
             return mapAppResultCode(appResult);
         } catch (RemoteException error) {
-            handleAppRemoteException("startNavigatingHome", error);
+            handleAppRemoteException(API_START_NAVIGATING_HOME, error);
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -714,7 +753,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Turn-by-turn data is empty",
-                    "sendDataTurnByTurn"));
+                    API_SEND_DATA_TURN_BY_TURN));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
@@ -723,8 +762,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "sendDataTurnByTurn"));
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_SEND_DATA_TURN_BY_TURN));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
@@ -735,8 +774,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             clearNavigationAppService();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION,
-                    "Navigation app connection failed",
-                    "sendDataTurnByTurn"));
+                    MESSAGE_APP_CONNECTION_FAILED,
+                    API_SEND_DATA_TURN_BY_TURN));
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
         // buildErrorJson is a generic {api,resultCode,message} envelope, reused here for the
@@ -744,7 +783,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         handleResult(buildErrorJson(
                 FAutoCarNavigationManager.RESULT_OK,
                 "Turn-by-turn data delivered",
-                "sendDataTurnByTurn"));
+                API_SEND_DATA_TURN_BY_TURN));
         return FAutoCarNavigationManager.RESULT_OK;
     }
 
@@ -757,7 +796,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Category is empty",
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
@@ -765,7 +804,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Invalid limit: " + limit,
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
@@ -773,7 +812,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Invalid sortedBy: " + sortedBy,
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
@@ -782,7 +821,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_VALUE_INVALID,
                     "Unsupported category: " + category,
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
         }
 
@@ -791,8 +830,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             bindNavigationApp();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_UNAVAILABLE,
-                    "Navigation app is unavailable",
-                    "getSearchNearbyCategory"));
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
         }
 
@@ -808,8 +847,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             clearNavigationAppService();
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION,
-                    "Navigation app connection failed",
-                    "getSearchNearbyCategory"));
+                    MESSAGE_APP_CONNECTION_FAILED,
+                    API_GET_SEARCH_NEARBY_CATEGORY));
             return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
         }
     }
@@ -832,24 +871,24 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private void handleAppCommandEvent(String data, boolean isError) {
         try {
             JSONObject event = new JSONObject(data);
-            String api = event.optString("api", "navigation");
-            int appResultCode = event.optInt("resultCode", -7);
+            String api = event.optString(JSON_KEY_API, API_NAVIGATION_FALLBACK);
+            int appResultCode = event.optInt(JSON_KEY_RESULT_CODE, -7);
             String message = event.optString(
-                    "message",
-                    isError ? "Navigation command failed" : "Navigation command succeeded");
+                    JSON_KEY_MESSAGE,
+                    isError ? MESSAGE_COMMAND_FAILED : "Navigation command succeeded");
             if (isError) {
                 handleError(buildAppErrorJson(api, appResultCode, message));
                 return;
             }
 
             JSONObject result = new JSONObject();
-            result.put("api", api);
-            result.put("resultCode", mapAppResultCode(appResultCode));
-            result.put("appResultCode", appResultCode);
-            result.put("message", message);
-            JSONObject destination = event.optJSONObject("destination");
+            result.put(JSON_KEY_API, api);
+            result.put(JSON_KEY_RESULT_CODE, mapAppResultCode(appResultCode));
+            result.put(JSON_KEY_APP_RESULT_CODE, appResultCode);
+            result.put(JSON_KEY_MESSAGE, message);
+            JSONObject destination = event.optJSONObject(JSON_KEY_DESTINATION);
             if (destination != null) {
-                result.put("destination", destination);
+                result.put(JSON_KEY_DESTINATION, destination);
             }
             handleResult(result.toString());
         } catch (JSONException error) {
@@ -858,7 +897,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 handleError(buildErrorJson(
                         FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
                         "Invalid navigation command event",
-                        "navigation"));
+                        API_NAVIGATION_FALLBACK));
             } else {
                 handleResult(data);
             }
@@ -870,7 +909,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         try {
             JSONObject destination = new JSONObject(data);
             String name = destination.optString("name", mLastDestination);
-            String suggestionId = destination.optString("suggestionId", mLastSuggestionId);
+            String suggestionId = destination.optString(JSON_KEY_SUGGESTION_ID, mLastSuggestionId);
             handleRouteChanged(buildRouteDataJson(name, suggestionId));
         } catch (JSONException error) {
             Log.e(LOG_TAG, "Invalid route changed payload", error);
@@ -884,12 +923,12 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             int sortedBy) {
         try {
             JSONObject appResult = new JSONObject(appResultJson);
-            int appResultCode = appResult.optInt("resultCode", -7);
+            int appResultCode = appResult.optInt(JSON_KEY_RESULT_CODE, -7);
             if (appResultCode != 0) {
                 handleError(buildAppErrorJson(
-                        "getSearchNearbyCategory",
+                        API_GET_SEARCH_NEARBY_CATEGORY,
                         appResultCode,
-                        appResult.optString("message", "Nearby search failed")));
+                        appResult.optString(JSON_KEY_MESSAGE, "Nearby search failed")));
                 return;
             }
             handleSearchNearByDataToClient(
@@ -899,7 +938,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             handleError(buildErrorJson(
                     FAutoCarNavigationManager.ERROR_OPERATION_FAILED,
                     "Navigation app returned an invalid search result",
-                    "getSearchNearbyCategory"));
+                    API_GET_SEARCH_NEARBY_CATEGORY));
         }
     }
 
@@ -910,23 +949,23 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
         try {
             JSONObject appState = new JSONObject(appStateJson);
-            String status = appState.optString("status", "UNAVAILABLE");
+            String status = appState.optString("status", STATUS_UNAVAILABLE);
             int state = mapAppState(status);
-            JSONObject destination = appState.optJSONObject("destination");
+            JSONObject destination = appState.optJSONObject(JSON_KEY_DESTINATION);
 
             mNavigationState = state;
             if (destination != null) {
                 mLastDestination = destination.optString("name", "");
-                mLastSuggestionId = destination.optString("suggestionId", "");
+                mLastSuggestionId = destination.optString(JSON_KEY_SUGGESTION_ID, "");
             } else {
                 mLastDestination = "";
                 mLastSuggestionId = "";
             }
             JSONObject pluginState = new JSONObject();
-            pluginState.put("state", state);
-            pluginState.put("stateName", getNavigationStateName(state));
-            pluginState.put("destination", mLastDestination);
-            pluginState.put("suggestionId", mLastSuggestionId);
+            pluginState.put(JSON_KEY_STATE, state);
+            pluginState.put(JSON_KEY_STATE_NAME, getNavigationStateName(state));
+            pluginState.put(JSON_KEY_DESTINATION, mLastDestination);
+            pluginState.put(JSON_KEY_SUGGESTION_ID, mLastSuggestionId);
             pluginState.put("lastSearchCategory", mLastSearchCategory);
             pluginState.put("lastSearchLimit", mLastSearchLimit);
             pluginState.put("lastSearchSortedBy", mLastSearchSortedBy);
@@ -950,15 +989,15 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
         try {
             JSONObject appState = new JSONObject(appStateJson);
-            int state = mapAppState(appState.optString("status", "UNAVAILABLE"));
-            JSONObject destination = appState.optJSONObject("destination");
+            int state = mapAppState(appState.optString("status", STATUS_UNAVAILABLE));
+            JSONObject destination = appState.optJSONObject(JSON_KEY_DESTINATION);
             JSONObject pluginState = new JSONObject();
-            pluginState.put("state", state);
-            pluginState.put("stateName", getNavigationStateName(state));
-            pluginState.put("destination", destination != null
+            pluginState.put(JSON_KEY_STATE, state);
+            pluginState.put(JSON_KEY_STATE_NAME, getNavigationStateName(state));
+            pluginState.put(JSON_KEY_DESTINATION, destination != null
                     ? destination.optString("name", "") : "");
-            pluginState.put("suggestionId", destination != null
-                    ? destination.optString("suggestionId", "") : "");
+            pluginState.put(JSON_KEY_SUGGESTION_ID, destination != null
+                    ? destination.optString(JSON_KEY_SUGGESTION_ID, "") : "");
             pluginState.put("lastSearchCategory", mLastSearchCategory);
             pluginState.put("lastSearchLimit", mLastSearchLimit);
             pluginState.put("lastSearchSortedBy", mLastSearchSortedBy);
@@ -992,7 +1031,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         clearNavigationAppService();
         handleError(buildErrorJson(
                 FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION,
-                "Navigation app connection failed",
+                MESSAGE_APP_CONNECTION_FAILED,
                 api));
     }
 
@@ -1003,16 +1042,16 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             int sortedBy) {
         try {
             JSONObject result = new JSONObject();
-            result.put("api", "searchNearby");
-            result.put("category", category);
-            result.put("limit", limit);
+            result.put(JSON_KEY_API, "searchNearby");
+            result.put(JSON_KEY_CATEGORY, category);
+            result.put(JSON_KEY_LIMIT, limit);
             result.put("sortedBy", sortedBy);
             result.put("sortedByName", getSortByName(sortedBy));
-            result.put("resultCode", mapAppResultCode(appResult.optInt("resultCode", -7)));
-            JSONArray candidates = appResult.optJSONArray("candidates");
-            result.put("candidates", candidates != null ? candidates : new JSONArray());
-            if (appResult.has("message")) {
-                result.put("message", appResult.optString("message"));
+            result.put(JSON_KEY_RESULT_CODE, mapAppResultCode(appResult.optInt(JSON_KEY_RESULT_CODE, -7)));
+            JSONArray candidates = appResult.optJSONArray(JSON_KEY_CANDIDATES);
+            result.put(JSON_KEY_CANDIDATES, candidates != null ? candidates : new JSONArray());
+            if (appResult.has(JSON_KEY_MESSAGE)) {
+                result.put(JSON_KEY_MESSAGE, appResult.optString(JSON_KEY_MESSAGE));
             }
             return result.toString();
         } catch (JSONException error) {
@@ -1067,7 +1106,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 return FAutoCarNavigationManager.NAVIGATION_STATE_ROUTE_SET;
             case "SIMULATING_DRIVE":
                 return FAutoCarNavigationManager.NAVIGATION_STATE_SIMULATING_DRIVE;
-            case "UNAVAILABLE":
+            case STATUS_UNAVAILABLE:
             default:
                 return FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE;
         }
@@ -1193,7 +1232,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private String getNavigationStateName(int state) {
         switch (state) {
             case FAutoCarNavigationManager.NAVIGATION_STATE_UNAVAILABLE:
-                return "UNAVAILABLE";
+                return STATUS_UNAVAILABLE;
             case FAutoCarNavigationManager.NAVIGATION_STATE_IDLE:
                 return "IDLE";
             case FAutoCarNavigationManager.NAVIGATION_STATE_SHOWING_SUGGESTIONS:
