@@ -70,6 +70,15 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         // Live map widget surface (new, isolated feature): released whenever this itemView
         // leaves the window. HomeCarouselAdapter is untouched — it does not override
         // onViewRecycled, so this itemView-level attach listener is the recycle signal instead.
+        //
+        // Uses releaseDebounced() rather than an immediate release(): HomeCarouselAdapter calls
+        // notifyDataSetChanged() on every card data update (e.g. every maneuver-text change),
+        // which triggers a detach/reattach of this itemView even though nothing about this
+        // card's type or position actually changed. A debounced release means that blip doesn't
+        // tear down and re-request the embedded surface each time — bind() (called from every
+        // rebind, see bindNaviFocusCard()) cancels the pending release before it fires. Only a
+        // detach that isn't followed by a rebind within the debounce window — a real scroll-away
+        // recycle — actually releases.
         mapSurfaceController = new HomeCardMapSurfaceController(itemView.getContext());
         itemView.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
             @Override
@@ -80,7 +89,7 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
 
             @Override
             public void onViewDetachedFromWindow(@NonNull View v) {
-                mapSurfaceController.release();
+                mapSurfaceController.releaseDebounced();
             }
         });
     }
