@@ -55,6 +55,7 @@ import com.ivi.car.navigation.util.Utils
 import com.ivi.car.navigation.viewmodel.AudioViewModel
 import com.ivi.car.navigation.viewmodel.NaviViewModel
 import com.mapbox.android.gestures.MoveGestureDetector
+import com.mapbox.bindgen.Value
 import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
@@ -1334,7 +1335,7 @@ class NaviFragment : Fragment() {
             MapStyleMode.LIGHT -> Style.LIGHT
             MapStyleMode.SATELLITE -> Style.SATELLITE
         }
-        loadMapStyle(styleUri)
+        loadMapStyle(styleUri, styleMode)
         if (persist) {
             SharePreferences.saveIntPreferences(
                 sharedPreferences.edit(),
@@ -1344,8 +1345,13 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private fun loadMapStyle(styleUri: String) {
+    private fun loadMapStyle(styleUri: String, styleMode: MapStyleMode) {
         binding.mapView.mapboxMap.loadStyle(styleUri) { style ->
+            if (styleMode == MapStyleMode.STANDARD_3D) {
+                style.setStyleImportConfigProperty("basemap", "lightPreset", Value("dawn"))
+                style.setStyleImportConfigProperty("basemap", "theme", Value("faded"))
+            }
+
             routeLineView.initializeLayers(style)
             val currentRoutes = mapboxNavigation.getNavigationRoutes()
             if (currentRoutes.isNotEmpty()) {
