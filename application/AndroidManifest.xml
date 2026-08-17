@@ -75,6 +75,17 @@
             android:enabled="true"
             android:exported="true"
             android:foregroundServiceType="dataSync"/>
+        <!-- New, isolated service for the launcher's live map widget (SurfaceControlViewHost,
+             API 32+ only). Reuses the existing BIND_NAVI_AIDL permission; does not modify
+             NaviAidlService or its intent-filter above. -->
+        <service
+            android:name=".service.MapWidgetSurfaceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NAVI_AIDL">
+            <intent-filter>
+                <action android:name="com.ivi.car.navigation.service.MapWidgetSurfaceService" />
+            </intent-filter>
+        </service>
 
         <uses-library
             android:name="ivi.recognition"
