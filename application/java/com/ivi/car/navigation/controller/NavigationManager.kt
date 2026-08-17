@@ -65,6 +65,12 @@ object NavigationManager {
     private val _widgetCamera = MutableStateFlow<WidgetCameraSnapshot?>(null)
     val widgetCamera: StateFlow<WidgetCameraSnapshot?> = _widgetCamera
 
+    // Read-only mirror of NaviFragment's current NavigationRoutes (empty when no route is set),
+    // for the launcher's map widget to draw its own route line from. NaviFragment is the only
+    // writer (see updateWidgetRoutes); this object does not request, compute, or apply routes.
+    private val _widgetRoutes = MutableStateFlow<List<NavigationRoute>>(emptyList())
+    val widgetRoutes: StateFlow<List<NavigationRoute>> = _widgetRoutes
+
     private lateinit var applicationContext: Context
     private lateinit var homeRepository: HomeRepository
     private lateinit var workRepository: WorkRepository
@@ -493,6 +499,15 @@ object NavigationManager {
      */
     fun updateWidgetCamera(center: Point, zoom: Double, bearing: Double, pitch: Double) {
         _widgetCamera.value = WidgetCameraSnapshot(center, zoom, bearing, pitch)
+    }
+
+    /**
+     * Called by NaviFragment only, from its routesObserver, with whatever routes it just set
+     * on its own routeLineApi (or an empty list when the route was cleared). Pure data mirror:
+     * does not read or influence NaviFragment's own routeLineApi/routeLineView in any way.
+     */
+    fun updateWidgetRoutes(routes: List<NavigationRoute>) {
+        _widgetRoutes.value = routes
     }
 
     fun getHome(): HomeLocation? = homeRepository.getHome()

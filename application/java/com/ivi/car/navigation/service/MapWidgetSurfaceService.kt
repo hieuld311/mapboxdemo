@@ -22,11 +22,13 @@ import com.ivi.car.navigation.controller.NavigationManager
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
-import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
-import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
-import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.navigation.base.route.NavigationRoute
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,8 +68,15 @@ class MapWidgetSurfaceService : Service() {
     private inner class WidgetMapSession(val clientToken: IBinder) {
         val lifecycleOwner = SessionLifecycleOwner()
         val mapView: MapView = MapView(themedContext())
+        val routeLineApi = MapboxRouteLineApi(
+            MapboxRouteLineApiOptions.Builder().vanishingRouteLineEnabled(true).build()
+        )
+        val routeLineView = MapboxRouteLineView(
+            MapboxRouteLineViewOptions.Builder(themedContext()).build()
+        )
         var host: SurfaceControlViewHost? = null
         var cameraJob: Job? = null
+        var routesJob: Job? = null
         val deathRecipient = IBinder.DeathRecipient {
             Log.w(TAG, "Widget client died without releasing; cleaning up")
             mainHandler.post { release(clientToken) }
@@ -119,7 +128,7 @@ class MapWidgetSurfaceService : Service() {
                     session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
                     ViewTreeLifecycleOwner.set(session.mapView, session.lifecycleOwner)
 
-                    setupMapView(session.mapView)
+                    setupMapView(session)
 
                     val viewHost = SurfaceControlViewHost(themedContext(), display, hostToken)
                     viewHost.setView(session.mapView, widthPx, heightPx)
@@ -144,6 +153,21 @@ class MapWidgetSurfaceService : Service() {
                         }
                     }
 
+                    session.routesJob = serviceScope.launch {
+                        NavigationManager.widgetRoutes.collectLatest { routes ->
+                            val style = session.mapView.mapboxMap.style ?: return@collectLatest
+                            if (routes.isNotEmpty()) {
+                                session.routeLineApi.setNavigationRoutes(routes) { value ->
+                                    session.routeLineView.renderRouteDrawData(style, value)
+                                }
+                            } else {
+                                session.routeLineApi.clearRouteLine { value ->
+                                    session.routeLineView.renderClearRouteLineValue(style, value)
+                                }
+                            }
+                        }
+                    }
+
                     viewHost.surfacePackage?.let { pkg ->
                         result.putParcelable(MapWidgetSurfaceInterface.KEY_SURFACE_PACKAGE, pkg)
                     } ?: Log.w(TAG, "requestMapSurface: surfacePackage was null after setView")
@@ -165,15 +189,24 @@ class MapWidgetSurfaceService : Service() {
     private fun themedContext(): Context =
         ContextThemeWrapper(applicationContext, R.style.Theme_Navigation)
 
-    private fun setupMapView(mapView: MapView) {
-        mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { }
-        // Device-GPS puck stays on for visual reference; camera-follow is driven separately by
-        // the NavigationManager.widgetCamera collector above, not by this puck's own position.
-        mapView.location.updateSettings {
-            enabled = true
-            pulsingEnabled = false
-            puckBearing = PuckBearing.HEADING
-            locationPuck = createDefault2DPuck(withBearing = true)
+    private fun setupMapView(session: WidgetMapSession) {
+        // Deliberately no location component / device-GPS puck here: this app is a simulation
+        // demo, and the widget must not depend on real GPS at all. Position and camera both
+        // come exclusively from NavigationManager.widgetCamera, which mirrors whatever
+        // NaviFragment is actually rendering (real GPS or mapboxReplayer simulation alike).
+        session.mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
+            session.routeLineView.initializeLayers(style)
+            // The routesJob collector (started right after this call) handles every route
+            // change from here on, but it's a StateFlow with no guaranteed ordering against
+            // this async style load — render whatever's already current now, so a widget
+            // attached mid-navigation shows the existing route immediately instead of waiting
+            // for the next route change.
+            val currentRoutes = NavigationManager.widgetRoutes.value
+            if (currentRoutes.isNotEmpty()) {
+                session.routeLineApi.setNavigationRoutes(currentRoutes) { value ->
+                    session.routeLineView.renderRouteDrawData(style, value)
+                }
+            }
         }
     }
 
@@ -186,6 +219,8 @@ class MapWidgetSurfaceService : Service() {
             // Already unlinked or binder already dead; safe to ignore.
         }
         session.cameraJob?.cancel()
+        session.routesJob?.cancel()
+        session.routeLineApi.cancel()
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         session.host?.release()

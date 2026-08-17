@@ -509,6 +509,10 @@ class NaviFragment : Fragment() {
     }
 
     private val routesObserver = RoutesObserver { routeUpdateResult ->
+        // Mirror whatever routes were just set (or the empty list, on clear) into
+        // NavigationManager for the launcher's map widget to draw its own route line from.
+        // Read-only sampling; does not affect routeLineApi/routeLineView below.
+        NavigationManager.updateWidgetRoutes(routeUpdateResult.navigationRoutes)
         if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
             routeTotalDistanceMeters = null
             (activity as? MainActivity)?.ensureNavigationServiceRunning()
