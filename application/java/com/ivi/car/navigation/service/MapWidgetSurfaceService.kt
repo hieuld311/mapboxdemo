@@ -12,6 +12,10 @@ import android.os.Looper
 import android.util.Log
 import android.view.ContextThemeWrapper
 import android.window.SurfaceControlViewHost
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewTreeLifecycleOwner
 import com.ivi.car.navigation.MapWidgetSurfaceInterface
 import com.ivi.car.navigation.R
 import com.mapbox.geojson.Point
@@ -39,7 +43,17 @@ class MapWidgetSurfaceService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap<IBinder, WidgetMapSession>()
 
+    // Mapbox's MapView requires a LifecycleOwner reachable from its view tree on attach
+    // (ViewLifecycleOwner.doOnAttached throws otherwise) — there's no Activity/Fragment here,
+    // so each session carries its own minimal, manually-driven one.
+    private class SessionLifecycleOwner : LifecycleOwner {
+        private val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle get() = registry
+        fun handleLifecycleEvent(event: Lifecycle.Event) = registry.handleLifecycleEvent(event)
+    }
+
     private inner class WidgetMapSession(val clientToken: IBinder) {
+        val lifecycleOwner = SessionLifecycleOwner()
         val mapView: MapView = MapView(themedContext())
         var host: SurfaceControlViewHost? = null
         val deathRecipient = IBinder.DeathRecipient {
@@ -88,11 +102,19 @@ class MapWidgetSurfaceService : Service() {
                     }
                     sessions[clientToken] = session
 
+                    // Must be set before the MapView is ever attached to a window: Mapbox's
+                    // attach-time lifecycle lookup runs synchronously inside setView() below.
+                    session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+                    ViewTreeLifecycleOwner.set(session.mapView, session.lifecycleOwner)
+
                     setupMapView(session.mapView)
 
                     val viewHost = SurfaceControlViewHost(themedContext(), display, hostToken)
                     viewHost.setView(session.mapView, widthPx, heightPx)
                     session.host = viewHost
+
+                    session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_START)
+                    session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
                     viewHost.surfacePackage?.let { pkg ->
                         result.putParcelable(MapWidgetSurfaceInterface.KEY_SURFACE_PACKAGE, pkg)
@@ -145,9 +167,12 @@ class MapWidgetSurfaceService : Service() {
         } catch (error: Exception) {
             // Already unlinked or binder already dead; safe to ignore.
         }
+        session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         session.host?.release()
         session.mapView.onStop()
         session.mapView.onDestroy()
+        session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     }
 
     override fun onBind(intent: Intent?): IBinder {
