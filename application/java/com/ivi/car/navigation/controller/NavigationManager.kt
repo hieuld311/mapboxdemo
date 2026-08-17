@@ -58,6 +58,13 @@ object NavigationManager {
     )
     val commandEvents: SharedFlow<NavigationCommandEvent> = _commandEvents.asSharedFlow()
 
+    // Read-only mirror of NaviFragment's live camera (real GPS or simulated replay — whichever
+    // NaviFragment is currently rendering), for the launcher's map widget to follow. NaviFragment
+    // is the only writer (see updateWidgetCamera); this object does not compute or apply camera
+    // state itself.
+    private val _widgetCamera = MutableStateFlow<WidgetCameraSnapshot?>(null)
+    val widgetCamera: StateFlow<WidgetCameraSnapshot?> = _widgetCamera
+
     private lateinit var applicationContext: Context
     private lateinit var homeRepository: HomeRepository
     private lateinit var workRepository: WorkRepository
@@ -478,6 +485,16 @@ object NavigationManager {
 
     fun getStateJson(): String = _state.value.toJson()
 
+    /**
+     * Called by NaviFragment only, once per location-matcher update, with whatever camera it
+     * just rendered (real GPS or simulated replay — same call site covers both, since replay
+     * flows through the same LocationObserver). Pure data mirror: does not read or influence
+     * NaviFragment's own NavigationCamera/MapboxNavigationViewportDataSource in any way.
+     */
+    fun updateWidgetCamera(center: Point, zoom: Double, bearing: Double, pitch: Double) {
+        _widgetCamera.value = WidgetCameraSnapshot(center, zoom, bearing, pitch)
+    }
+
     fun getHome(): HomeLocation? = homeRepository.getHome()
 
     fun getWork(): WorkLocation? = workRepository.getWork()
@@ -702,5 +719,12 @@ object NavigationManager {
         val id: Long,
         val api: String,
         val destination: NavigationSuggestion
+    )
+
+    data class WidgetCameraSnapshot(
+        val center: Point,
+        val zoom: Double,
+        val bearing: Double,
+        val pitch: Double
     )
 }

@@ -18,14 +18,23 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewTreeLifecycleOwner
 import com.ivi.car.navigation.MapWidgetSurfaceInterface
 import com.ivi.car.navigation.R
-import com.mapbox.geojson.Point
+import com.ivi.car.navigation.controller.NavigationManager
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.PuckBearing
-import com.mapbox.maps.plugin.locationcomponent.OnIndicatorPositionChangedListener
+import com.mapbox.maps.plugin.animation.MapAnimationOptions
+import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
 import com.mapbox.maps.plugin.locationcomponent.location
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -35,12 +44,14 @@ import java.util.concurrent.TimeUnit
  * SurfaceControlViewHost (API 32+ only), and hands the resulting SurfacePackage back over
  * Binder for embedding in a remote SurfaceView (e.g. the launcher's home card).
  *
- * Deliberately independent of NavigationManager/NaviAidlService: the camera here follows
- * Mapbox's own built-in location component (device GPS), not the app's internal routing
- * state, so this file introduces zero changes to any existing, working service.
+ * Camera is a read-only mirror of NavigationManager.widgetCamera (itself fed only by
+ * NaviFragment, see NaviFragment.locationObserver) — so the widget matches whatever NaviFragment
+ * is actually rendering, real GPS or simulated replay alike. This file does not read or modify
+ * NaviAidlService, or any of NaviFragment's own camera/route-line logic.
  */
 class MapWidgetSurfaceService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = ConcurrentHashMap<IBinder, WidgetMapSession>()
 
     // Mapbox's MapView requires a LifecycleOwner reachable from its view tree on attach
@@ -56,6 +67,7 @@ class MapWidgetSurfaceService : Service() {
         val lifecycleOwner = SessionLifecycleOwner()
         val mapView: MapView = MapView(themedContext())
         var host: SurfaceControlViewHost? = null
+        var cameraJob: Job? = null
         val deathRecipient = IBinder.DeathRecipient {
             Log.w(TAG, "Widget client died without releasing; cleaning up")
             mainHandler.post { release(clientToken) }
@@ -116,6 +128,22 @@ class MapWidgetSurfaceService : Service() {
                     session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_START)
                     session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
+                    session.cameraJob = serviceScope.launch {
+                        NavigationManager.widgetCamera.filterNotNull().collectLatest { snapshot ->
+                            session.mapView.camera.easeTo(
+                                CameraOptions.Builder()
+                                    .center(snapshot.center)
+                                    .zoom(snapshot.zoom)
+                                    .bearing(snapshot.bearing)
+                                    .pitch(snapshot.pitch)
+                                    .build(),
+                                MapAnimationOptions.Builder()
+                                    .duration(CAMERA_EASE_DURATION_MS)
+                                    .build()
+                            )
+                        }
+                    }
+
                     viewHost.surfacePackage?.let { pkg ->
                         result.putParcelable(MapWidgetSurfaceInterface.KEY_SURFACE_PACKAGE, pkg)
                     } ?: Log.w(TAG, "requestMapSurface: surfacePackage was null after setView")
@@ -139,24 +167,14 @@ class MapWidgetSurfaceService : Service() {
 
     private fun setupMapView(mapView: MapView) {
         mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { }
+        // Device-GPS puck stays on for visual reference; camera-follow is driven separately by
+        // the NavigationManager.widgetCamera collector above, not by this puck's own position.
         mapView.location.updateSettings {
             enabled = true
             pulsingEnabled = false
             puckBearing = PuckBearing.HEADING
             locationPuck = createDefault2DPuck(withBearing = true)
         }
-        mapView.location.addOnIndicatorPositionChangedListener(
-            object : OnIndicatorPositionChangedListener {
-                override fun onIndicatorPositionChanged(point: Point) {
-                    mapView.mapboxMap.setCamera(
-                        CameraOptions.Builder()
-                            .center(point)
-                            .zoom(WIDGET_MAP_ZOOM)
-                            .build()
-                    )
-                }
-            }
-        )
     }
 
     // Main-thread only: called both from the Binder-thread request path (posted) and onDestroy.
@@ -167,6 +185,7 @@ class MapWidgetSurfaceService : Service() {
         } catch (error: Exception) {
             // Already unlinked or binder already dead; safe to ignore.
         }
+        session.cameraJob?.cancel()
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         session.host?.release()
@@ -186,13 +205,14 @@ class MapWidgetSurfaceService : Service() {
             for (clientToken in sessions.keys.toList()) {
                 release(clientToken)
             }
+            serviceScope.cancel()
         }
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "MapWidgetSurfaceService"
-        private const val WIDGET_MAP_ZOOM = 16.0
         private const val REQUEST_TIMEOUT_SECONDS = 2L
+        private const val CAMERA_EASE_DURATION_MS = 750L
     }
 }

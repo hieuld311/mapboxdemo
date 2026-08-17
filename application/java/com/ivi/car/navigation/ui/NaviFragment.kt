@@ -55,7 +55,6 @@ import com.ivi.car.navigation.util.Utils
 import com.ivi.car.navigation.viewmodel.AudioViewModel
 import com.ivi.car.navigation.viewmodel.NaviViewModel
 import com.mapbox.android.gestures.MoveGestureDetector
-import com.mapbox.bindgen.Value
 import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
@@ -272,6 +271,18 @@ class NaviFragment : Fragment() {
             // update camera position to account for new location
             viewportDataSource.onLocationChanged(enhancedLocation)
             viewportDataSource.evaluate()
+
+            // Mirror the camera actually being rendered here (real GPS or simulated replay)
+            // into NavigationManager for the launcher's map widget. Read-only sampling of the
+            // live MapboxMap camera state; does not affect viewportDataSource/navigationCamera.
+            binding.mapView.mapboxMap.cameraState.let { cameraState ->
+                NavigationManager.updateWidgetCamera(
+                    center = cameraState.center,
+                    zoom = cameraState.zoom,
+                    bearing = cameraState.bearing,
+                    pitch = cameraState.pitch
+                )
+            }
             //update location when simulate
             if (isLocationConnected) {
                 mockLocationUpdateJob?.cancel()
@@ -1335,7 +1346,7 @@ class NaviFragment : Fragment() {
             MapStyleMode.LIGHT -> Style.LIGHT
             MapStyleMode.SATELLITE -> Style.SATELLITE
         }
-        loadMapStyle(styleUri, styleMode)
+        loadMapStyle(styleUri)
         if (persist) {
             SharePreferences.saveIntPreferences(
                 sharedPreferences.edit(),
@@ -1345,13 +1356,8 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private fun loadMapStyle(styleUri: String, styleMode: MapStyleMode) {
+    private fun loadMapStyle(styleUri: String) {
         binding.mapView.mapboxMap.loadStyle(styleUri) { style ->
-            if (styleMode == MapStyleMode.STANDARD_3D) {
-                style.setStyleImportConfigProperty("basemap", "lightPreset", Value("dawn"))
-                style.setStyleImportConfigProperty("basemap", "theme", Value("faded"))
-            }
-
             routeLineView.initializeLayers(style)
             val currentRoutes = mapboxNavigation.getNavigationRoutes()
             if (currentRoutes.isNotEmpty()) {
