@@ -194,6 +194,12 @@ class NavigationService: Service() {
 
         if (routeProgress.currentState == RouteProgressState.COMPLETE) {
             NavigationManager.stopNavigation()
+            // Explicit, not left to widgetRoutesObserver reacting to stopNavigation()'s route
+            // clear - unregisterObserver() a few lines below tears that observer down right
+            // after, which could race the reaction and leave the widget's maneuver/trip-progress
+            // card (and route line) stuck showing stale data indefinitely after arrival.
+            NavigationManager.updateWidgetRouteProgress(null)
+            NavigationManager.updateWidgetRoutes(emptyList())
             val destination = navigation.getDestination()
             navigation = Navigation().apply {
                 setDestination(destination)

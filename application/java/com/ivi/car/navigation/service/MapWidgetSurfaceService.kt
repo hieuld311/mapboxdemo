@@ -26,11 +26,13 @@ import com.ivi.car.navigation.MapWidgetSurfaceInterface
 import com.ivi.car.navigation.R
 import com.ivi.car.navigation.controller.NavigationManager
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.locationcomponent.OnIndicatorPositionChangedListener
 import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.base.TimeFormat
@@ -100,6 +102,15 @@ class MapWidgetSurfaceService : Service() {
             MapboxRouteLineViewOptions.Builder(themedContext()).build()
         )
         val locationProvider = NavigationLocationProvider()
+        // Vanishing route line (trims the already-traveled portion behind the puck), matching
+        // NaviFragment's own onPositionChangedListener exactly. registered/removed against
+        // mapView.location in setupMapView()/release() below.
+        val onPositionChangedListener = OnIndicatorPositionChangedListener { point ->
+            val result = routeLineApi.updateTraveledRouteLine(point)
+            mapView.mapboxMap.style?.apply {
+                routeLineView.renderRouteLineUpdate(this, result)
+            }
+        }
         val maneuverView: MapboxManeuverView = MapboxManeuverView(themedContext())
         val tripProgressView: MapboxTripProgressView = MapboxTripProgressView(themedContext())
         val maneuverApi = MapboxManeuverApi(
@@ -332,10 +343,19 @@ class MapWidgetSurfaceService : Service() {
         // independent device-GPS lookup here, matching NaviFragment's own puck setup.
         session.mapView.location.apply {
             setLocationProvider(session.locationProvider)
+            addOnIndicatorPositionChangedListener(session.onPositionChangedListener)
             puckBearingEnabled = true
+            showAccuracyRing = true
             enabled = true
             puckBearing = PuckBearing.COURSE
-            locationPuck = createDefault2DPuck(true)
+            // Matches NaviFragment's own puck icons exactly (see its initView()/
+            // updateVehiclePuck()) - the default createDefault2DPuck() icon on its own renders
+            // noticeably smaller than what the in-app map shows.
+            locationPuck = createDefault2DPuck(true).apply {
+                topImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                bearingImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_puck_icon)
+                shadowImage = ImageHolder.from(com.mapbox.maps.R.drawable.mapbox_user_icon_shadow)
+            }
         }
 
         session.mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
@@ -367,6 +387,7 @@ class MapWidgetSurfaceService : Service() {
         session.locationJob?.cancel()
         session.progressJob?.cancel()
         session.routeLineApi.cancel()
+        session.mapView.location.removeOnIndicatorPositionChangedListener(session.onPositionChangedListener)
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         session.host?.release()
