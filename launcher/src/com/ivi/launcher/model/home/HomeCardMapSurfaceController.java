@@ -64,12 +64,23 @@ public class HomeCardMapSurfaceController {
             "com.ivi.car.navigation.service.MapWidgetSurfaceService";
     private static final String NAVI_PACKAGE = "com.ivi.car.navigation";
     private static final long RELEASE_DEBOUNCE_MS = 400L;
+    // How long bind() must go quiet (no new SurfaceView reassignment) before we actually
+    // request a live surface. Swiping/settling the carousel can reassign the nav card's
+    // SurfaceView instance several times in quick succession as RecyclerView recycles/rebinds
+    // it - each reassignment would otherwise immediately trigger requestMapSurface(), which
+    // tears down whatever session is currently live (see
+    // MapWidgetSurfaceService#requestMapSurface, which calls release(clientToken) before
+    // building a new session). Debouncing the attach the same way release() is debounced below
+    // means we only actually attach once the card's on-screen position/instance has settled,
+    // instead of tearing down and rebuilding the Mapbox session mid-swipe.
+    private static final long ATTACH_DEBOUNCE_MS = 250L;
 
     private final Context mContext;
     private final IBinder mClientToken = new Binder();
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final Handler mReleaseHandler = new Handler(Looper.getMainLooper());
     private final Runnable mReleaseRunnable = this::release;
+    private final Runnable mAttachRunnable = this::attachIfReady;
     private final ExecutorService mIoExecutor = Executors.newSingleThreadExecutor();
 
     @Nullable private MapWidgetSurfaceInterface mService;
@@ -114,6 +125,9 @@ public class HomeCardMapSurfaceController {
             return;
         }
         if (surfaceView == mAttachedSurfaceView) {
+            // Already showing on this exact SurfaceView - nothing to (re)settle, and no reason
+            // to keep a stale debounced attach (for a previous, different SurfaceView) alive.
+            mMainHandler.removeCallbacks(mAttachRunnable);
             return;
         }
         mPendingSurfaceView = surfaceView;
@@ -128,9 +142,15 @@ public class HomeCardMapSurfaceController {
             } catch (Exception e) {
                 Log.e(TAG, "bind: bindService exception", e);
             }
+            // No live session exists yet at this point, so there is nothing to tear down -
+            // onServiceConnected() below attaches immediately once the service connects rather
+            // than waiting out the debounce, so the very first attach isn't needlessly delayed.
             return;
         }
-        attachIfReady();
+        // Debounced: only actually request a live surface once bind() stops being called (i.e.
+        // the carousel has stopped reassigning this card's SurfaceView) for ATTACH_DEBOUNCE_MS.
+        mMainHandler.removeCallbacks(mAttachRunnable);
+        mMainHandler.postDelayed(mAttachRunnable, ATTACH_DEBOUNCE_MS);
     }
 
     private void attachIfReady() {
@@ -227,6 +247,7 @@ public class HomeCardMapSurfaceController {
      */
     public void release() {
         cancelPendingRelease();
+        mMainHandler.removeCallbacks(mAttachRunnable);
         if (mService != null) {
             try {
                 mService.releaseMapSurface(mClientToken);
