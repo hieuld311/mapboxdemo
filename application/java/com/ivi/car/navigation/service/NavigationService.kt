@@ -16,9 +16,13 @@ import com.ivi.car.navigation.controller.NavigationManager
 import com.ivi.car.navigation.model.Navigation
 import com.ivi.car.navigation.ui.MainActivity
 import com.ivi.car.navigation.util.Utils
+import com.mapbox.geojson.Point
 import com.mapbox.navigation.base.trip.model.RouteProgressState
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.MapboxNavigationProvider
+import com.mapbox.navigation.core.directions.session.RoutesObserver
+import com.mapbox.navigation.core.trip.session.LocationMatcherResult
+import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.tripdata.maneuver.api.MapboxManeuverApi
 import dagger.hilt.android.AndroidEntryPoint
@@ -40,6 +44,14 @@ class NavigationService: Service() {
     private var carClusterManager: FAutoCarClusterControlManager? = null
     private var gson: Gson? = null
     private var routeObserverRegistered = false
+    // Feed NavigationManager's widgetXxx mirror (consumed by MapWidgetSurfaceService for the
+    // launcher's live map widget) independently of NaviFragment - NaviFragment's own observers
+    // only run while it is resumed (see requireMapboxNavigation's onResumedObserver), so without
+    // this the widget freezes the moment the user leaves the app to look at the home screen,
+    // which is exactly when the widget is meant to be useful. Does not touch NaviFragment or its
+    // observers.
+    private var widgetRoutesObserverRegistered = false
+    private var widgetLocationObserverRegistered = false
     private var carConnectionRequested = false
 
     private val serviceConnection: ServiceConnection = object: ServiceConnection{
@@ -83,6 +95,14 @@ class NavigationService: Service() {
             if (!routeObserverRegistered) {
                 mapboxNavigation.registerRouteProgressObserver(routeProgressObserver)
                 routeObserverRegistered = true
+            }
+            if (!widgetRoutesObserverRegistered) {
+                mapboxNavigation.registerRoutesObserver(widgetRoutesObserver)
+                widgetRoutesObserverRegistered = true
+            }
+            if (!widgetLocationObserverRegistered) {
+                mapboxNavigation.registerLocationObserver(widgetLocationObserver)
+                widgetLocationObserverRegistered = true
             }
 
             Log.i(TAG, "Service đã kết nối vào Navigation Session có sẵn")
@@ -156,6 +176,9 @@ class NavigationService: Service() {
             routeProgress.distanceRemaining.toDouble(),
             routeProgress.durationRemaining.toInt()
         )
+        // Widget mirror (see widgetRoutesObserver/widgetLocationObserver below) - keeps the
+        // launcher's maneuver/trip-progress card live while NaviFragment isn't resumed.
+        NavigationManager.updateWidgetRouteProgress(routeProgress)
         val canUpdate =
             previousStepRoad != navigation.getStepRoad() ||
                     kotlin.math.abs(previousStepDistance - navigation.getStepDistance()) >= 1.0 ||
@@ -185,6 +208,42 @@ class NavigationService: Service() {
             stopSelf()
             return@RouteProgressObserver
         }
+    }
+
+    // Widget mirror only (see field doc above) - NaviFragment.routesObserver still owns the
+    // in-app route line/camera/ensureNavigationServiceRunning() logic untouched, this just
+    // relays the same route-list change to NavigationManager's widget-facing state.
+    private val widgetRoutesObserver = RoutesObserver { routeUpdateResult ->
+        NavigationManager.updateWidgetRoutes(routeUpdateResult.navigationRoutes)
+        if (routeUpdateResult.navigationRoutes.isEmpty()) {
+            NavigationManager.updateWidgetRouteProgress(null)
+        }
+    }
+
+    // Widget mirror only. Puck position (widgetLocationMatcherResult) is relayed unconditionally
+    // - it is the same authoritative data NaviFragment's own locationObserver would relay, so
+    // there is nothing to fight over. Camera is different: while NaviFragment is resumed it
+    // already mirrors its own MapView's real cameraState (correctly reflecting overview/
+    // following/free-pan), which is strictly better than anything this headless service could
+    // approximate - so the synthetic follow-camera below only fires while MainActivity isn't
+    // running, to avoid the two sources fighting over widgetCamera when the app is foregrounded.
+    private val widgetLocationObserver = object : LocationObserver {
+        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
+            NavigationManager.updateWidgetLocationMatcherResult(locationMatcherResult)
+            if (!MainActivity.isRunning) {
+                val enhancedLocation = locationMatcherResult.enhancedLocation
+                NavigationManager.updateWidgetCamera(
+                    NavigationManager.WidgetCameraSnapshot(
+                        center = Point.fromLngLat(enhancedLocation.longitude, enhancedLocation.latitude),
+                        zoom = WIDGET_FOLLOWING_ZOOM,
+                        bearing = enhancedLocation.bearing?.toDouble() ?: 0.0,
+                        pitch = WIDGET_FOLLOWING_PITCH
+                    )
+                )
+            }
+        }
+
+        override fun onNewRawLocation(rawLocation: com.mapbox.common.location.Location) {}
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -251,6 +310,14 @@ class NavigationService: Service() {
                 mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
                 routeObserverRegistered = false
             }
+            if (widgetRoutesObserverRegistered) {
+                mapboxNavigation.unregisterRoutesObserver(widgetRoutesObserver)
+                widgetRoutesObserverRegistered = false
+            }
+            if (widgetLocationObserverRegistered) {
+                mapboxNavigation.unregisterLocationObserver(widgetLocationObserver)
+                widgetLocationObserverRegistered = false
+            }
             Log.i(TAG, "Đã hủy đăng ký observer và dừng Trip Session")
         }
     }
@@ -263,5 +330,13 @@ class NavigationService: Service() {
             Log.d(TAG, "Sending navigation update to cluster")
             carClusterManager?.fireNavPictureUpdatesEvent(FAutoCarClusterControlManager.PICTURE_UPDATE_EVENT_HEADER_DISPLAY_AVAILABLE, messageJson.toString())
         }
+    }
+
+    private companion object {
+        // Matches NaviFragment's own hardcoded following-camera values (updateCamera(), and the
+        // followingZoomPropertyOverride(17.0) applied when simulation starts) so the widget's
+        // synthetic background camera looks consistent with what the in-app map itself shows.
+        const val WIDGET_FOLLOWING_ZOOM = 17.0
+        const val WIDGET_FOLLOWING_PITCH = 60.0
     }
 }
