@@ -453,12 +453,11 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (focusView == null) return;
 
         // Live embedded map (API 32+ only - see HomeCardMapSurfaceController/
-        // NavMapSurfaceCoordinator). bind() is idempotent and safe on every bind() call,
-        // including repeated calls for the same SurfaceView.
-        SurfaceView mapSurface = focusView.findViewById(R.id.navFocusMapSurface);
-        if (mapSurface != null) {
-            mapSurfaceCoordinator.bind(mapSurface);
-        }
+        // NavMapSurfaceCoordinator) attach/release is driven entirely by focus transitions now
+        // (see attachNavMapSurface()/releaseNavMapSurface(), called from applyFocusState()) -
+        // not from every bind() here, so a routine data-only rebind while already focused never
+        // touches the map surface, and a card only ever requests a surface once it has actually
+        // finished becoming the focused card.
 
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         View tbtView = focusView.findViewById(R.id.navFocusTbtView);
@@ -589,6 +588,38 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             compactShadowImage.setVisibility(View.VISIBLE);
             compactShadowImage.setAlpha(1f);
         }
+        // Every path that changes focus state - instant bind, a completed grow animation, or a
+        // completed/skipped collapse - funnels through here once the state is actually settled,
+        // so this is the single point where the live map surface tracks focus: attach only once
+        // this card has fully become focused (never mid-transform), release the moment it stops
+        // being focused (e.g. immediately when the user swipes away), instead of waiting on the
+        // itemView's own attach-to-window signal, which lags far behind a real swipe gesture.
+        if (currentType == HomeCardItem.TYPE_NAVIGATION) {
+            if (focused) {
+                attachNavMapSurface();
+            } else {
+                releaseNavMapSurface();
+            }
+        }
+    }
+
+    /**
+     * Requests the live embedded map surface for this card's SurfaceView. Only called once this
+     * card has fully become the focused nav card (see applyFocusState()), so the widget never
+     * attaches to a SurfaceView whose on-screen bounds/transform are still mid-animation.
+     */
+    private void attachNavMapSurface() {
+        View focusView = focusSlot.getChildCount() > 0 ? focusSlot.getChildAt(0) : null;
+        if (focusView == null) return;
+        SurfaceView mapSurface = focusView.findViewById(R.id.navFocusMapSurface);
+        if (mapSurface != null) {
+            mapSurfaceCoordinator.bind(mapSurface);
+        }
+    }
+
+    /** Releases the live embedded map surface as soon as this card stops being focused. */
+    private void releaseNavMapSurface() {
+        mapSurfaceCoordinator.release();
     }
 
     private void animateFocusState(boolean focused) {
