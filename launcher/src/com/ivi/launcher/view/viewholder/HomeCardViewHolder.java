@@ -682,6 +682,19 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (runningAnimator != null) {
             runningAnimator.cancel();
         }
+        if (host.getCarouselScrollState() != RecyclerView.SCROLL_STATE_IDLE) {
+            // A drag/fling is already repositioning this item via RecyclerView's own touch/scroll
+            // handling. Unlike animateFocusState() (which locks touch via
+            // host.beginFocusTransitionAnimator() while it runs), this collapse path is triggered
+            // mid-drag by IviLauncher's SCROLL_STATE_DRAGGING listener and is never touch-locked -
+            // animating cardRoot's width frame-by-frame below would race that concurrent
+            // touch-driven scroll, which is what makes the shrinking card visually land on top of
+            // a neighboring card during a swipe. Snap straight to the compact state instead; the
+            // user's own gesture is already supplying the motion.
+            runningAnimator = null;
+            applyFocusState(false);
+            return;
+        }
         final float endSlotScaleX = getStartSlotScaleX();
         final float endSlotScaleY = getStartSlotScaleY();
         final float endSlotTranslationY = getStartSlotTranslationY();
