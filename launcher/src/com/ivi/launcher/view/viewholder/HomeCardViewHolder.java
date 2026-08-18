@@ -55,6 +55,16 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     private ValueAnimator runningAnimator;
     private int currentType = -1;
     private int boundAdapterPosition = RecyclerView.NO_POSITION;
+    // Cached nav compact/focus views (and crucially, the SurfaceView inside the focus one) - see
+    // ensureCardLayout(). Reused whenever this ViewHolder switches back to TYPE_NAVIGATION
+    // instead of inflating fresh ones, so HomeCarouselAdapter's lack of stable IDs (a
+    // notifyDataSetChanged() pass, fired on every compact-card data push, can reassign this
+    // ViewHolder to a different card type for one bind and back to nav on the very next) doesn't
+    // hand attachNavMapSurface() a brand-new SurfaceView every time - HomeCardMapSurfaceController
+    // can't recognize a new instance as already-attached, forcing a full
+    // MapWidgetSurfaceService rebuild (a visible black flash) on essentially every compact update.
+    private View cachedNavCompactView;
+    private View cachedNavFocusView;
 
     public HomeCardViewHolder(
             @NonNull View itemView,
@@ -73,12 +83,12 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         mapSurfaceCoordinator = NavMapSurfaceCoordinator.getInstance(itemView.getContext());
 
         // Deliberately no release-on-detach here: the live map session is meant to stay warm
-        // across ordinary RecyclerView churn (a swipe genuinely detaching this itemView, or
-        // scrap reuse from a data-only rebind) so swiping back to the nav card shows it
-        // instantly instead of rebuilding MapWidgetSurfaceService's MapView from scratch. See
-        // applyFocusState()/attachNavMapSurface() - the only release paths left are
-        // ensureCardLayout() (this ViewHolder's view tree is being reused for a different card
-        // type) and IviLauncher.onDestroy() (activity teardown).
+        // across ordinary RecyclerView churn (a swipe genuinely detaching this itemView, a data-
+        // only rebind, or even a brief type switch-away-and-back - see cachedNavFocusView) so
+        // swiping back to the nav card shows it instantly instead of rebuilding
+        // MapWidgetSurfaceService's MapView from scratch. See applyFocusState()/
+        // attachNavMapSurface() - the only remaining release path is IviLauncher.onDestroy()
+        // (activity teardown).
     }
 
     public void bind(HomeCardItem item, int adapterPosition, boolean focused, boolean animate) {
@@ -96,17 +106,25 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (currentType == type && compactSlot.getChildCount() > 0 && focusSlot.getChildCount() > 0) {
             return;
         }
-        if (currentType == HomeCardItem.TYPE_NAVIGATION && type != HomeCardItem.TYPE_NAVIGATION) {
-            // This ViewHolder's view tree is about to be discarded for a different card type -
-            // a definite teardown, not transient churn, so release immediately rather than
-            // debounce.
-            mapSurfaceCoordinator.release();
-        }
         currentType = type;
         compactSlot.removeAllViews();
         focusSlot.removeAllViews();
-        View compactView = inflater.inflate(getCompactLayoutRes(type), compactSlot, false);
-        View focusView = inflater.inflate(getFocusLayoutRes(type), focusSlot, false);
+
+        View compactView;
+        View focusView;
+        if (type == HomeCardItem.TYPE_NAVIGATION && cachedNavFocusView != null) {
+            // Reuse the cached nav views (see field doc) instead of inflating fresh ones -
+            // keeps the same SurfaceView instance alive across a type switch-away-and-back.
+            compactView = cachedNavCompactView;
+            focusView = cachedNavFocusView;
+        } else {
+            compactView = inflater.inflate(getCompactLayoutRes(type), compactSlot, false);
+            focusView = inflater.inflate(getFocusLayoutRes(type), focusSlot, false);
+            if (type == HomeCardItem.TYPE_NAVIGATION) {
+                cachedNavCompactView = compactView;
+                cachedNavFocusView = focusView;
+            }
+        }
         compactSlot.addView(compactView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT

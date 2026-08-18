@@ -87,6 +87,14 @@ public class HomeCardMapSurfaceController {
     private boolean mBound = false;
     @Nullable private SurfaceView mPendingSurfaceView;
     @Nullable private SurfaceView mAttachedSurfaceView;
+    // The SurfacePackage last handed to mAttachedSurfaceView. A SurfaceView that gets removed
+    // from its parent and re-added later (e.g. HomeCardViewHolder caching/reusing the nav
+    // SurfaceView across a type switch-away-and-back) goes through a real window detach/reattach
+    // - the embedded content stops rendering until setChildSurfacePackage() is called again for
+    // the new attachment, even though the live session on the server was never released. Kept so
+    // that can be reapplied locally (no Binder call, no server-side session rebuild) whenever
+    // bind() sees the same SurfaceView again.
+    @Nullable private SurfaceControlViewHost.SurfacePackage mLastSurfacePackage;
     // Main-thread only. True from the moment attachIfReady() dispatches a requestMapSurface()
     // call until its response (success or failure) is handled back on the main thread - see
     // class doc.
@@ -103,6 +111,7 @@ public class HomeCardMapSurfaceController {
         public void onServiceDisconnected(ComponentName name) {
             mService = null;
             mAttachedSurfaceView = null;
+            mLastSurfacePackage = null;
         }
     };
 
@@ -125,8 +134,13 @@ public class HomeCardMapSurfaceController {
             return;
         }
         if (surfaceView == mAttachedSurfaceView) {
-            // Already showing on this exact SurfaceView - nothing to (re)settle, and no reason
-            // to keep a stale debounced attach (for a previous, different SurfaceView) alive.
+            // Already tracking this exact SurfaceView, but it may have been genuinely removed
+            // from its parent and re-added since the SurfacePackage was last applied (see
+            // mLastSurfacePackage doc) - reapplying is a cheap, local, no-Binder-call operation,
+            // safe and idempotent to do on every bind(), not just after a real detach.
+            if (mLastSurfacePackage != null && surfaceView.isAttachedToWindow()) {
+                surfaceView.setChildSurfacePackage(mLastSurfacePackage);
+            }
             mMainHandler.removeCallbacks(mAttachRunnable);
             return;
         }
@@ -220,6 +234,7 @@ public class HomeCardMapSurfaceController {
                 }
                 surfaceView.setChildSurfacePackage(finalPkg);
                 mAttachedSurfaceView = surfaceView;
+                mLastSurfacePackage = finalPkg;
             });
         });
     }
@@ -266,6 +281,7 @@ public class HomeCardMapSurfaceController {
         mService = null;
         mPendingSurfaceView = null;
         mAttachedSurfaceView = null;
+        mLastSurfacePackage = null;
         mRequestInFlight = false;
     }
 }
