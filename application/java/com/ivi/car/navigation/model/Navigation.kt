@@ -19,6 +19,11 @@ class Navigation {
     private var lane: LaneDirection.Shape? = null
     private var type: NavigationState.Maneuver.Type? = null
 
+    // Overall route fraction traveled (0.0-1.0), for the launcher compact card's live progress
+    // bar. Same field name/JSON key on both sides - see
+    // com.ivi.launcher.model.Navigation#percentTraveled, which Gson matches by name.
+    private var percentTraveled = 0.0
+
     fun getCurrentRoad(): String? {
         return currentRoad
     }
@@ -115,6 +120,14 @@ class Navigation {
         this.distanceUnit = distanceUnit
     }
 
+    fun getPercentTraveled(): Double {
+        return percentTraveled
+    }
+
+    fun setPercentTraveled(percentTraveled: Double) {
+        this.percentTraveled = percentTraveled
+    }
+
     override fun toString(): String {
         return JSONObject()
             .put("currentRoad", currentRoad.toString())
@@ -129,6 +142,7 @@ class Navigation {
             .put("cue", cue.toString())
             .put("lane", lane.toString())
             .put("type", type.toString())
+            .put("percentTraveled", percentTraveled)
             .toString()
     }
 }

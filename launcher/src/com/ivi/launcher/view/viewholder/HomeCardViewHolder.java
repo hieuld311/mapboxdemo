@@ -3,6 +3,7 @@ package com.ivi.launcher.view.viewholder;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
+import android.os.Build;
 import android.view.LayoutInflater;
 import android.view.SurfaceView;
 import android.view.View;
@@ -20,7 +21,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.ivi.launcher.R;
 import com.ivi.launcher.constant.HomeCardItem;
 import com.ivi.launcher.constant.HomeCarouselConfig;
-import com.ivi.launcher.model.home.HomeCardMapSurfaceController;
+import com.ivi.launcher.model.home.NavMapSurfaceCoordinator;
 import com.ivi.launcher.view.adapter.HomeCarouselAdapter;
 
 public class HomeCardViewHolder extends RecyclerView.ViewHolder {
@@ -46,7 +47,10 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     private final FrameLayout focusSlot;
     private final View focusShadowImage;
     private final LayoutInflater inflater;
-    private final HomeCardMapSurfaceController mapSurfaceController;
+    // Process-wide singleton (see class doc) - never a per-ViewHolder controller, so any number
+    // of TYPE_NAVIGATION ViewHolder instances the RecyclerView keeps around always share exactly
+    // one live map-widget session. Does not touch HomeCarouselAdapter.java.
+    private final NavMapSurfaceCoordinator mapSurfaceCoordinator;
 
     private ValueAnimator runningAnimator;
     private int currentType = -1;
@@ -66,30 +70,22 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         focusLayer = itemView.findViewById(R.id.focusLayer);
         focusSlot = itemView.findViewById(R.id.focusSlot);
         focusShadowImage = itemView.findViewById(R.id.focusShadowImage);
+        mapSurfaceCoordinator = NavMapSurfaceCoordinator.getInstance(itemView.getContext());
 
-        // Live map widget surface (new, isolated feature): released whenever this itemView
-        // leaves the window. HomeCarouselAdapter is untouched — it does not override
-        // onViewRecycled, so this itemView-level attach listener is the recycle signal instead.
-        //
-        // Uses releaseDebounced() rather than an immediate release(): HomeCarouselAdapter calls
-        // notifyDataSetChanged() on every card data update (e.g. every maneuver-text change),
-        // which triggers a detach/reattach of this itemView even though nothing about this
-        // card's type or position actually changed. A debounced release means that blip doesn't
-        // tear down and re-request the embedded surface each time — bind() (called from every
-        // rebind, see bindNaviFocusCard()) cancels the pending release before it fires. Only a
-        // detach that isn't followed by a rebind within the debounce window — a real scroll-away
-        // recycle — actually releases.
-        mapSurfaceController = new HomeCardMapSurfaceController(itemView.getContext());
+        // A plain itemView detach might just be RecyclerView scrap churn (notifyDataSetChanged()
+        // fires on every TBT data push, see HomeCardMapSurfaceController's class doc) rather than
+        // a real recycle - releaseDebounced() absorbs that instead of tearing the surface down
+        // and immediately re-requesting it.
         itemView.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
             @Override
-            public void onViewAttachedToWindow(@NonNull View v) {
-                // No-op: bindNaviFocusCard() (re)attaches the surface once the SurfaceView
-                // itself has been laid out.
+            public void onViewAttachedToWindow(View v) {
+                // No-op: bind() (called separately by the adapter) is what re-attaches the
+                // surface, and it already cancels any pending debounced release itself.
             }
 
             @Override
-            public void onViewDetachedFromWindow(@NonNull View v) {
-                mapSurfaceController.releaseDebounced();
+            public void onViewDetachedFromWindow(View v) {
+                mapSurfaceCoordinator.releaseDebounced();
             }
         });
     }
@@ -109,11 +105,11 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (currentType == type && compactSlot.getChildCount() > 0 && focusSlot.getChildCount() > 0) {
             return;
         }
-        if (currentType == HomeCardItem.TYPE_NAVIGATION) {
-            // About to discard the nav focus card's view tree (type change, or first bind
-            // after this holder was recycled for a different card) — release the embedded
-            // map surface before the SurfaceView itself is detached/destroyed.
-            mapSurfaceController.release();
+        if (currentType == HomeCardItem.TYPE_NAVIGATION && type != HomeCardItem.TYPE_NAVIGATION) {
+            // This ViewHolder's view tree is about to be discarded for a different card type -
+            // a definite teardown, not transient churn, so release immediately rather than
+            // debounce.
+            mapSurfaceCoordinator.release();
         }
         currentType = type;
         compactSlot.removeAllViews();
@@ -433,7 +429,7 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (progressBar != null) {
             progressBar.setMax(1000);
             progressBar.setIndeterminate(false);
-            progressBar.setProgress(0);
+            progressBar.setProgress(item.naviPercentTraveled);
         }
         if (remainingView != null) {
             if (!isEmpty(item.naviRemainingDistance)) {
@@ -456,20 +452,28 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         View focusView = focusSlot.getChildCount() > 0 ? focusSlot.getChildAt(0) : null;
         if (focusView == null) return;
 
-        ImageView mapImage = focusView.findViewById(R.id.navFocusMapImage);
-        if (mapImage != null) {
-            mapImage.setImageBitmap(item.naviMapSnapshot);
-        }
-
+        // Live embedded map (API 32+ only - see HomeCardMapSurfaceController/
+        // NavMapSurfaceCoordinator). bind() is idempotent and safe on every bind() call,
+        // including repeated calls for the same SurfaceView.
         SurfaceView mapSurface = focusView.findViewById(R.id.navFocusMapSurface);
         if (mapSurface != null) {
-            // Defer to next layout pass: right after inflate the SurfaceView has no size yet,
-            // and getHostToken()/embedding requires it to be attached and measured.
-            mapSurface.post(() -> mapSurfaceController.bind(mapSurface));
+            mapSurfaceCoordinator.bind(mapSurface);
         }
 
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         View tbtView = focusView.findViewById(R.id.navFocusTbtView);
+
+        // On API 32+ the live widget already renders its own maneuver + trip-progress card
+        // baked into the surface (see MapWidgetSurfaceService's progressCard), gated on the nav
+        // app's own route-active state - showing the launcher's static text card on top would
+        // duplicate it, so both static states are suppressed here. Below API 32 (no live
+        // surface at all, see HomeCardMapSurfaceController#bind), fall back to the original
+        // static default/TBT text views driven by item.naviActive.
+        if (Build.VERSION.SDK_INT >= 32) {
+            if (defaultView != null) defaultView.setVisibility(View.GONE);
+            if (tbtView != null) tbtView.setVisibility(View.GONE);
+            return;
+        }
 
         if (!item.naviActive) {
             if (defaultView != null) defaultView.setVisibility(View.VISIBLE);

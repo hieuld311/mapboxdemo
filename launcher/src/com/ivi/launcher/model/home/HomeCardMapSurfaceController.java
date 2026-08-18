@@ -14,7 +14,7 @@ import android.os.RemoteException;
 import android.util.Log;
 import android.view.Display;
 import android.view.SurfaceView;
-import android.window.SurfaceControlViewHost;
+import android.view.SurfaceControlViewHost;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -25,17 +25,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * New, isolated controller: requests a live, read-only map surface from the navigation app's
+ * Controller: requests a live, read-only map surface from the navigation app's
  * MapWidgetSurfaceService and embeds it into a SurfaceView via SurfaceControlViewHost
  * (API 32+ only). Entirely separate from HomeNaviDataProvider's existing map-snapshot Bitmap
  * channel, which is left untouched and stays visible underneath as a fallback.
  *
  * bind()/release() are idempotent and safe to call repeatedly across RecyclerView rebinds and
- * recycles (HomeCarouselAdapter is not modified — this controller is driven entirely from
+ * recycles (HomeCarouselAdapter is not modified - this controller is driven entirely from
  * HomeCardViewHolder, using itemView's own attach-state as the recycle signal).
  *
  * HomeCarouselAdapter.setItems() calls notifyDataSetChanged() on every card data update
- * (e.g. every maneuver-text change), which — with no stable IDs — makes RecyclerView's default
+ * (e.g. every maneuver-text change), which - with no stable IDs - makes RecyclerView's default
  * ItemAnimator detach/reattach bound item views even though nothing about the nav card's type
  * or position changed. releaseDebounced()/cancelPendingRelease() absorb that churn so a
  * detach/reattach blip doesn't tear down and re-request the embedded surface on every update;
@@ -43,10 +43,20 @@ import java.util.concurrent.Executors;
  *
  * requestMapSurface() is a synchronous Binder call, and the nav app does real work (creating a
  * MapView, loading a style, building a SurfaceControlViewHost) on its own main thread before
- * replying — so attachIfReady() dispatches that call to mIoExecutor instead of running it on
+ * replying - so attachIfReady() dispatches that call to mIoExecutor instead of running it on
  * this (launcher) main thread, and hops back to the main thread only for the SurfaceView calls
  * that require it (setChildSurfacePackage(), and the mAttachedSurfaceView/mPendingSurfaceView
  * state below, which is otherwise only ever touched from the main thread).
+ *
+ * mRequestInFlight guards against a real race: if bind() is called again (e.g. new TBT data
+ * pushes a rebind) while a prior requestMapSurface() round-trip is still outstanding,
+ * attachIfReady() would otherwise fire a second concurrent requestMapSurface() call. Since
+ * mClientToken is one stable Binder for this controller's whole lifetime, the server
+ * (MapWidgetSurfaceService.requestMapSurface()) calls release(clientToken) at the top of every
+ * request - so a second concurrent call tears down and rebuilds the session that the first call
+ * is still waiting on, causing a visible reload. The guard makes a bind() that arrives mid-flight
+ * a no-op; attachIfReady() is retried once the in-flight request's response lands (see the
+ * "stale response" branch below), so the retry still happens, just serialized.
  */
 public class HomeCardMapSurfaceController {
     private static final String TAG = "HomeCardMapSurfaceCtl";
@@ -66,6 +76,10 @@ public class HomeCardMapSurfaceController {
     private boolean mBound = false;
     @Nullable private SurfaceView mPendingSurfaceView;
     @Nullable private SurfaceView mAttachedSurfaceView;
+    // Main-thread only. True from the moment attachIfReady() dispatches a requestMapSurface()
+    // call until its response (success or failure) is handled back on the main thread - see
+    // class doc.
+    private boolean mRequestInFlight = false;
 
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
@@ -87,12 +101,12 @@ public class HomeCardMapSurfaceController {
 
     /**
      * Requests (or re-requests, if the SurfaceView instance changed) a live map surface for
-     * the given SurfaceView. Safe to call on every RecyclerView bind — a no-op if already
+     * the given SurfaceView. Safe to call on every RecyclerView bind - a no-op if already
      * attached to this exact SurfaceView.
      */
     public void bind(@NonNull SurfaceView surfaceView) {
         // Any rebind (including a redundant one for the same SurfaceView, below) means this
-        // card is still genuinely in use — cancel a pending debounced release from a prior
+        // card is still genuinely in use - cancel a pending debounced release from a prior
         // detach/reattach blip so it doesn't fire out from under an active surface.
         cancelPendingRelease();
 
@@ -125,6 +139,15 @@ public class HomeCardMapSurfaceController {
         if (surfaceView == null || service == null || !surfaceView.isAttachedToWindow()) {
             return;
         }
+        if (surfaceView == mAttachedSurfaceView) {
+            return;
+        }
+        if (mRequestInFlight) {
+            // A request for this (or a prior) SurfaceView is already outstanding - see class
+            // doc. Once it resolves, the response handler below retries attachIfReady() so this
+            // rebind isn't lost, it's just deferred until the in-flight call finishes.
+            return;
+        }
         IBinder hostToken = surfaceView.getHostToken();
         if (hostToken == null) {
             return;
@@ -137,6 +160,7 @@ public class HomeCardMapSurfaceController {
         Display display = surfaceView.getDisplay();
         int displayId = display != null ? display.getDisplayId() : 0;
 
+        mRequestInFlight = true;
         mIoExecutor.execute(() -> {
             SurfaceControlViewHost.SurfacePackage pkg = null;
             try {
@@ -150,16 +174,28 @@ public class HomeCardMapSurfaceController {
             }
             SurfaceControlViewHost.SurfacePackage finalPkg = pkg;
             mMainHandler.post(() -> {
+                mRequestInFlight = false;
+                // True if this controller was released, or rebound to a different SurfaceView,
+                // while the background request was in flight - i.e. a newer bind() arrived and
+                // was swallowed by the in-flight guard above. Used below to retry that swallowed
+                // rebind now that it's clear, whether this request succeeded or failed - a plain
+                // failure with no swallowed rebind is not retried, to avoid spinning against a
+                // genuinely unavailable service.
+                boolean pendingChanged = mService == null || surfaceView != mPendingSurfaceView
+                        || !surfaceView.isAttachedToWindow();
                 if (finalPkg == null) {
                     Log.w(TAG, "attachIfReady: no surface package returned");
+                    if (pendingChanged) {
+                        attachIfReady();
+                    }
                     return;
                 }
                 // The response may arrive after this controller was released or rebound to a
-                // different SurfaceView while the background request was in flight — drop a
+                // different SurfaceView while the background request was in flight - drop a
                 // stale response instead of attaching it to the wrong (or a torn-down) surface.
-                if (mService == null || surfaceView != mPendingSurfaceView
-                        || !surfaceView.isAttachedToWindow()) {
+                if (pendingChanged) {
                     Log.w(TAG, "attachIfReady: dropping stale surface package response");
+                    attachIfReady();
                     return;
                 }
                 surfaceView.setChildSurfacePackage(finalPkg);
@@ -171,7 +207,7 @@ public class HomeCardMapSurfaceController {
     /**
      * Schedules release() after RELEASE_DEBOUNCE_MS, unless cancelPendingRelease() (via bind())
      * runs first. Use this from a detach signal that might just be transient RecyclerView churn
-     * rather than a real recycle — e.g. itemView's OnAttachStateChangeListener.
+     * rather than a real recycle - e.g. itemView's OnAttachStateChangeListener.
      */
     public void releaseDebounced() {
         mReleaseHandler.removeCallbacks(mReleaseRunnable);
@@ -186,7 +222,7 @@ public class HomeCardMapSurfaceController {
     /**
      * Immediately releases the surface. Safe to call repeatedly, or when never bound. Use this
      * for a definite teardown (e.g. the nav card's view tree is about to be discarded for a
-     * different card type in ensureCardLayout()) — for a plain itemView detach, prefer
+     * different card type in ensureCardLayout()) - for a plain itemView detach, prefer
      * releaseDebounced() instead, see class doc.
      */
     public void release() {
@@ -209,5 +245,6 @@ public class HomeCardMapSurfaceController {
         mService = null;
         mPendingSurfaceView = null;
         mAttachedSurfaceView = null;
+        mRequestInFlight = false;
     }
 }

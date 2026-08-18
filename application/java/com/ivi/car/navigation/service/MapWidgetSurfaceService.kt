@@ -3,6 +3,8 @@ package com.ivi.car.navigation.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
@@ -11,20 +13,40 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.view.ContextThemeWrapper
-import android.window.SurfaceControlViewHost
+import android.view.Gravity
+import android.view.SurfaceControlViewHost
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
-import androidx.lifecycle.ViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
 import com.ivi.car.navigation.MapWidgetSurfaceInterface
 import com.ivi.car.navigation.R
 import com.ivi.car.navigation.controller.NavigationManager
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
+import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
+import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.navigation.base.TimeFormat
+import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
+import com.mapbox.navigation.base.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.base.route.NavigationRoute
+import com.mapbox.navigation.tripdata.maneuver.api.MapboxManeuverApi
+import com.mapbox.navigation.tripdata.progress.api.MapboxTripProgressApi
+import com.mapbox.navigation.tripdata.progress.model.DistanceRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.EstimatedTimeToArrivalFormatter
+import com.mapbox.navigation.tripdata.progress.model.PercentDistanceTraveledFormatter
+import com.mapbox.navigation.tripdata.progress.model.TimeRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView
+import com.mapbox.navigation.ui.components.tripprogress.view.MapboxTripProgressView
+import com.mapbox.navigation.ui.maps.location.NavigationLocationProvider
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
@@ -46,10 +68,13 @@ import java.util.concurrent.TimeUnit
  * SurfaceControlViewHost (API 32+ only), and hands the resulting SurfacePackage back over
  * Binder for embedding in a remote SurfaceView (e.g. the launcher's home card).
  *
- * Camera is a read-only mirror of NavigationManager.widgetCamera (itself fed only by
- * NaviFragment, see NaviFragment.locationObserver) — so the widget matches whatever NaviFragment
- * is actually rendering, real GPS or simulated replay alike. This file does not read or modify
- * NaviAidlService, or any of NaviFragment's own camera/route-line logic.
+ * Camera and puck are a read-only mirror of NavigationManager.widgetCamera /
+ * widgetLocationMatcherResult (both fed only by NaviFragment, see NaviFragment.locationObserver)
+ * - so the widget always matches whatever NaviFragment is actually rendering, real GPS or
+ * simulated replay alike, and stays live (map + puck) even when idle. The maneuver + trip
+ * progress card mirrors NavigationManager.widgetRouteProgress and is visible ONLY while a route
+ * is active (null progress = idle = card hidden, map + puck only). This file does not read or
+ * modify NaviAidlService, or any of NaviFragment's own camera/route-line logic.
  */
 class MapWidgetSurfaceService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -74,9 +99,35 @@ class MapWidgetSurfaceService : Service() {
         val routeLineView = MapboxRouteLineView(
             MapboxRouteLineViewOptions.Builder(themedContext()).build()
         )
+        val locationProvider = NavigationLocationProvider()
+        val maneuverView: MapboxManeuverView = MapboxManeuverView(themedContext())
+        val tripProgressView: MapboxTripProgressView = MapboxTripProgressView(themedContext())
+        val maneuverApi = MapboxManeuverApi(
+            MapboxDistanceFormatter(DistanceFormatterOptions.Builder(themedContext()).build())
+        )
+        val tripProgressApi = MapboxTripProgressApi(
+            TripProgressUpdateFormatter.Builder(themedContext())
+                .distanceRemainingFormatter(
+                    DistanceRemainingFormatter(
+                        DistanceFormatterOptions.Builder(themedContext()).build()
+                    )
+                )
+                .timeRemainingFormatter(TimeRemainingFormatter(themedContext()))
+                .percentRouteTraveledFormatter(PercentDistanceTraveledFormatter())
+                .estimatedTimeToArrivalFormatter(
+                    EstimatedTimeToArrivalFormatter(themedContext(), TimeFormat.NONE_SPECIFIED)
+                )
+                .build()
+        )
+        // Rounded, translucent card docked top-left: maneuverView above a 1dp divider above
+        // tripProgressView, stacked vertically. Built in buildCompositeRoot(), GONE until the
+        // first non-null widgetRouteProgress arrives (see progressJob below).
+        var progressCard: LinearLayout? = null
         var host: SurfaceControlViewHost? = null
         var cameraJob: Job? = null
         var routesJob: Job? = null
+        var locationJob: Job? = null
+        var progressJob: Job? = null
         val deathRecipient = IBinder.DeathRecipient {
             Log.w(TAG, "Widget client died without releasing; cleaning up")
             mainHandler.post { release(clientToken) }
@@ -123,15 +174,19 @@ class MapWidgetSurfaceService : Service() {
                     }
                     sessions[clientToken] = session
 
-                    // Must be set before the MapView is ever attached to a window: Mapbox's
-                    // attach-time lifecycle lookup runs synchronously inside setView() below.
+                    // Must be set before the composite root is ever attached to a window:
+                    // Mapbox's attach-time lifecycle lookup (inside the child MapView) runs
+                    // synchronously as soon as the root is attached via viewHost.setView() below,
+                    // and ViewTreeLifecycleOwner resolves by walking up the parent chain - so
+                    // setting it on the composite root (before setView) is sufficient for the
+                    // child MapView to find it too.
                     session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-                    ViewTreeLifecycleOwner.set(session.mapView, session.lifecycleOwner)
-
+                    val compositeRoot = buildCompositeRoot(session)
+                    compositeRoot.setViewTreeLifecycleOwner(session.lifecycleOwner)
                     setupMapView(session)
 
                     val viewHost = SurfaceControlViewHost(themedContext(), display, hostToken)
-                    viewHost.setView(session.mapView, widthPx, heightPx)
+                    viewHost.setView(compositeRoot, widthPx, heightPx)
                     session.host = viewHost
 
                     session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_START)
@@ -168,6 +223,32 @@ class MapWidgetSurfaceService : Service() {
                         }
                     }
 
+                    session.locationJob = serviceScope.launch {
+                        NavigationManager.widgetLocationMatcherResult.filterNotNull()
+                            .collectLatest { locationMatcherResult ->
+                                session.locationProvider.changePosition(
+                                    location = locationMatcherResult.enhancedLocation,
+                                    keyPoints = locationMatcherResult.keyPoints
+                                )
+                            }
+                    }
+
+                    session.progressJob = serviceScope.launch {
+                        NavigationManager.widgetRouteProgress.collectLatest { routeProgress ->
+                            val card = session.progressCard ?: return@collectLatest
+                            if (routeProgress == null) {
+                                card.visibility = View.GONE
+                                return@collectLatest
+                            }
+                            card.visibility = View.VISIBLE
+                            val maneuvers = session.maneuverApi.getManeuvers(routeProgress)
+                            session.maneuverView.renderManeuvers(maneuvers)
+                            session.tripProgressView.render(
+                                session.tripProgressApi.getTripProgress(routeProgress)
+                            )
+                        }
+                    }
+
                     viewHost.surfacePackage?.let { pkg ->
                         result.putParcelable(MapWidgetSurfaceInterface.KEY_SURFACE_PACKAGE, pkg)
                     } ?: Log.w(TAG, "requestMapSurface: surfacePackage was null after setView")
@@ -189,11 +270,74 @@ class MapWidgetSurfaceService : Service() {
     private fun themedContext(): Context =
         ContextThemeWrapper(applicationContext, R.style.Theme_Navigation)
 
+    /**
+     * MapView (full-bleed) with the maneuver+divider+tripProgress card overlaid top-left. The
+     * card starts GONE; progressJob (started right after this) toggles it based on
+     * NavigationManager.widgetRouteProgress, per the idle=map+puck-only / active=card-visible
+     * requirement.
+     */
+    private fun buildCompositeRoot(session: WidgetMapSession): FrameLayout {
+        val root = FrameLayout(themedContext())
+        root.addView(
+            session.mapView,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+
+        val cardBackground = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPxF(CARD_CORNER_RADIUS_DP)
+            setColor(CARD_BACKGROUND_COLOR)
+        }
+        val progressCard = LinearLayout(themedContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBackground
+            visibility = View.GONE
+        }
+        progressCard.addView(
+            session.maneuverView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        val divider = View(themedContext()).apply {
+            setBackgroundColor(CARD_DIVIDER_COLOR)
+        }
+        progressCard.addView(
+            divider,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(CARD_DIVIDER_HEIGHT_DP))
+        )
+        progressCard.addView(
+            session.tripProgressView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+
+        val cardParams = FrameLayout.LayoutParams(
+            dpToPx(CARD_WIDTH_DP),
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            setMargins(dpToPx(CARD_MARGIN_DP), dpToPx(CARD_MARGIN_DP), dpToPx(CARD_MARGIN_DP), dpToPx(CARD_MARGIN_DP))
+        }
+        root.addView(progressCard, cardParams)
+        session.progressCard = progressCard
+
+        return root
+    }
+
+    private fun dpToPx(dp: Int): Int = dpToPxF(dp).toInt()
+
+    private fun dpToPxF(dp: Int): Float = dp * themedContext().resources.displayMetrics.density
+
     private fun setupMapView(session: WidgetMapSession) {
-        // Deliberately no location component / device-GPS puck here: this app is a simulation
-        // demo, and the widget must not depend on real GPS at all. Position and camera both
-        // come exclusively from NavigationManager.widgetCamera, which mirrors whatever
-        // NaviFragment is actually rendering (real GPS or mapboxReplayer simulation alike).
+        // Puck position comes exclusively from NavigationManager.widgetLocationMatcherResult
+        // (locationJob above), which mirrors whatever NaviFragment is actually rendering - no
+        // independent device-GPS lookup here, matching NaviFragment's own puck setup.
+        session.mapView.location.apply {
+            setLocationProvider(session.locationProvider)
+            puckBearingEnabled = true
+            enabled = true
+            puckBearing = PuckBearing.COURSE
+            locationPuck = createDefault2DPuck(true)
+        }
+
         session.mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
             session.routeLineView.initializeLayers(style)
             // The routesJob collector (started right after this call) handles every route
@@ -201,7 +345,7 @@ class MapWidgetSurfaceService : Service() {
             // this async style load — render whatever's already current now, so a widget
             // attached mid-navigation shows the existing route immediately instead of waiting
             // for the next route change.
-            val currentRoutes = NavigationManager.widgetRoutes.value
+            val currentRoutes: List<NavigationRoute> = NavigationManager.widgetRoutes.value
             if (currentRoutes.isNotEmpty()) {
                 session.routeLineApi.setNavigationRoutes(currentRoutes) { value ->
                     session.routeLineView.renderRouteDrawData(style, value)
@@ -220,6 +364,8 @@ class MapWidgetSurfaceService : Service() {
         }
         session.cameraJob?.cancel()
         session.routesJob?.cancel()
+        session.locationJob?.cancel()
+        session.progressJob?.cancel()
         session.routeLineApi.cancel()
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         session.lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
@@ -249,5 +395,11 @@ class MapWidgetSurfaceService : Service() {
         private const val TAG = "MapWidgetSurfaceService"
         private const val REQUEST_TIMEOUT_SECONDS = 2L
         private const val CAMERA_EASE_DURATION_MS = 750L
+        private const val CARD_MARGIN_DP = 12
+        private const val CARD_WIDTH_DP = 200
+        private const val CARD_CORNER_RADIUS_DP = 12
+        private const val CARD_DIVIDER_HEIGHT_DP = 1
+        private val CARD_BACKGROUND_COLOR = Color.parseColor("#99202020")
+        private val CARD_DIVIDER_COLOR = Color.parseColor("#33FFFFFF")
     }
 }

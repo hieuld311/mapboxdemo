@@ -5,19 +5,6 @@
     android:id="@+id/navigationFocusRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
-    <!-- Live map preview, full-bleed background. Bound from item.naviMapSnapshot;
-         stays empty (transparent) until the app pushes the first snapshot. Kept as a fallback
-         layer beneath navFocusMapSurface (nav app not running / below API 32). -->
-    <ImageView
-        android:id="@+id/navFocusMapImage"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:scaleType="centerCrop"
-        android:importantForAccessibility="no"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
 
     <!-- Live, smoothly-rendering map surface (API 32+), embedded from the nav app's
          MapWidgetSurfaceService via SurfaceControlViewHost. Read-only: no touch is wired to
@@ -32,6 +19,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- Default state: shown when navigation is not active -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/navFocusDefaultView"
@@ -72,20 +60,19 @@
             app:layout_constraintEnd_toEndOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
-    <!-- TBT state: shown when navigation is active. Floats over the map instead of
-         covering the whole card, so the snapshot behind it stays visible. -->
+
+    <!-- TBT state: shown when navigation is active -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/navFocusTbtView"
         android:visibility="gone"
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="24dp"
-        android:padding="16dp"
-        android:background="@drawable/bg_area_focused"
-        app:layout_constraintWidth_percent="0.62"
+        android:layout_height="0dp"
+        android:padding="24dp"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
         <ImageView
             android:id="@+id/navFocusTurnIcon"
             android:layout_width="80dp"

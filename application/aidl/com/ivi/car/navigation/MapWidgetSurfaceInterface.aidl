@@ -1,13 +1,8 @@
 // MapWidgetSurfaceInterface.aidl
 package com.ivi.car.navigation;
 
-// New, isolated AIDL surface separate from NaviAidlInterface: hands a live, read-only map
-// SurfacePackage to a widget host (e.g. the launcher's home card) via SurfaceControlViewHost.
-// API 32+ only. Does not touch NaviAidlInterface/NaviAidlService in any way.
+
 interface MapWidgetSurfaceInterface {
-    // Bundle key under which the returned Bundle carries an
-    // android.window.SurfaceControlViewHost.SurfacePackage (wrapped in a Bundle rather than
-    // returned directly, since AIDL cannot cleanly reference that nested framework type).
     const String KEY_SURFACE_PACKAGE = "surfacePackage";
 
     /**
@@ -18,7 +13,7 @@ interface MapWidgetSurfaceInterface {
      * used to key/release this session and to detect the caller's process dying.
      *
      * Returns a Bundle containing KEY_SURFACE_PACKAGE on success, or an empty Bundle if the
-     * surface could not be created (below API 32, no such display, or invalid size).
+     * surface could not be created.
      */
     Bundle requestMapSurface(IBinder hostToken, int displayId, int widthPx, int heightPx, IBinder clientToken);
 

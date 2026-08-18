@@ -29,7 +29,9 @@ import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
+import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.MapboxNavigation
+import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,6 +44,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object NavigationManager {
+    /**
+     * Read-only camera snapshot mirrored to the launcher's live map widget (see
+     * MapWidgetSurfaceService, HomeCardMapSurfaceController). Plain data, not a Mapbox
+     * CameraState, so it can be constructed from NaviFragment without pulling a MapboxMap
+     * reference into this object.
+     */
+    data class WidgetCameraSnapshot(
+        val center: Point,
+        val zoom: Double,
+        val bearing: Double,
+        val pitch: Double
+    )
+
     private const val DEFAULT_SEARCH_LIMIT = 5
     private const val MAX_SEARCH_LIMIT = 20
     private const val SORT_UNSPECIFIED = 0
@@ -58,18 +73,39 @@ object NavigationManager {
     )
     val commandEvents: SharedFlow<NavigationCommandEvent> = _commandEvents.asSharedFlow()
 
-    // Read-only mirror of NaviFragment's live camera (real GPS or simulated replay — whichever
-    // NaviFragment is currently rendering), for the launcher's map widget to follow. NaviFragment
-    // is the only writer (see updateWidgetCamera); this object does not compute or apply camera
-    // state itself.
+    // Read-only mirrors of what NaviFragment is actually rendering (real GPS or simulated
+    // replay alike), consumed by MapWidgetSurfaceService to drive the launcher's embedded live
+    // map widget. NaviFragment is the only writer (see its locationObserver/routeProgressObserver
+    // /routesObserver) - this object never drives navigation itself from these values.
     private val _widgetCamera = MutableStateFlow<WidgetCameraSnapshot?>(null)
     val widgetCamera: StateFlow<WidgetCameraSnapshot?> = _widgetCamera
 
-    // Read-only mirror of NaviFragment's current NavigationRoutes (empty when no route is set),
-    // for the launcher's map widget to draw its own route line from. NaviFragment is the only
-    // writer (see updateWidgetRoutes); this object does not request, compute, or apply routes.
     private val _widgetRoutes = MutableStateFlow<List<NavigationRoute>>(emptyList())
     val widgetRoutes: StateFlow<List<NavigationRoute>> = _widgetRoutes
+
+    // Null when idle (no active route) - the widget's maneuver/trip-progress card is only
+    // shown while this is non-null; the map + puck stay visible either way.
+    private val _widgetRouteProgress = MutableStateFlow<RouteProgress?>(null)
+    val widgetRouteProgress: StateFlow<RouteProgress?> = _widgetRouteProgress
+
+    private val _widgetLocationMatcherResult = MutableStateFlow<LocationMatcherResult?>(null)
+    val widgetLocationMatcherResult: StateFlow<LocationMatcherResult?> = _widgetLocationMatcherResult
+
+    fun updateWidgetCamera(snapshot: WidgetCameraSnapshot?) {
+        _widgetCamera.value = snapshot
+    }
+
+    fun updateWidgetRoutes(routes: List<NavigationRoute>) {
+        _widgetRoutes.value = routes
+    }
+
+    fun updateWidgetRouteProgress(routeProgress: RouteProgress?) {
+        _widgetRouteProgress.value = routeProgress
+    }
+
+    fun updateWidgetLocationMatcherResult(locationMatcherResult: LocationMatcherResult?) {
+        _widgetLocationMatcherResult.value = locationMatcherResult
+    }
 
     private lateinit var applicationContext: Context
     private lateinit var homeRepository: HomeRepository
@@ -491,25 +527,6 @@ object NavigationManager {
 
     fun getStateJson(): String = _state.value.toJson()
 
-    /**
-     * Called by NaviFragment only, once per location-matcher update, with whatever camera it
-     * just rendered (real GPS or simulated replay — same call site covers both, since replay
-     * flows through the same LocationObserver). Pure data mirror: does not read or influence
-     * NaviFragment's own NavigationCamera/MapboxNavigationViewportDataSource in any way.
-     */
-    fun updateWidgetCamera(center: Point, zoom: Double, bearing: Double, pitch: Double) {
-        _widgetCamera.value = WidgetCameraSnapshot(center, zoom, bearing, pitch)
-    }
-
-    /**
-     * Called by NaviFragment only, from its routesObserver, with whatever routes it just set
-     * on its own routeLineApi (or an empty list when the route was cleared). Pure data mirror:
-     * does not read or influence NaviFragment's own routeLineApi/routeLineView in any way.
-     */
-    fun updateWidgetRoutes(routes: List<NavigationRoute>) {
-        _widgetRoutes.value = routes
-    }
-
     fun getHome(): HomeLocation? = homeRepository.getHome()
 
     fun getWork(): WorkLocation? = workRepository.getWork()
@@ -734,12 +751,5 @@ object NavigationManager {
         val id: Long,
         val api: String,
         val destination: NavigationSuggestion
-    )
-
-    data class WidgetCameraSnapshot(
-        val center: Point,
-        val zoom: Double,
-        val bearing: Double,
-        val pitch: Double
     )
 }

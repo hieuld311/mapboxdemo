@@ -32,8 +32,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
@@ -55,6 +53,7 @@ import com.ivi.car.navigation.util.Utils
 import com.ivi.car.navigation.viewmodel.AudioViewModel
 import com.ivi.car.navigation.viewmodel.NaviViewModel
 import com.mapbox.android.gestures.MoveGestureDetector
+import com.mapbox.bindgen.Value
 import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
@@ -125,11 +124,8 @@ import fauto.car.sharedata.FAutoShareDataManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.util.Locale
 import javax.inject.Inject
@@ -202,8 +198,6 @@ class NaviFragment : Fragment() {
     private var mockLocationUpdateJob: Job? = null
     private var searchDebounceJob: Job? = null
     private var photoLoadJob: Job? = null
-    private var mapSnapshotJob: Job? = null
-    private var mapSnapshotCaptureInFlight = false
     private var mainSelectedSuggestionId: String? = null
     private val pixelDensity = Resources.getSystem().displayMetrics.density
     private val overviewPadding: EdgeInsets by lazy {
@@ -272,17 +266,21 @@ class NaviFragment : Fragment() {
             viewportDataSource.onLocationChanged(enhancedLocation)
             viewportDataSource.evaluate()
 
-            // Mirror the camera actually being rendered here (real GPS or simulated replay)
-            // into NavigationManager for the launcher's map widget. Read-only sampling of the
-            // live MapboxMap camera state; does not affect viewportDataSource/navigationCamera.
-            binding.mapView.mapboxMap.cameraState.let { cameraState ->
-                NavigationManager.updateWidgetCamera(
-                    center = cameraState.center,
-                    zoom = cameraState.zoom,
-                    bearing = cameraState.bearing,
-                    pitch = cameraState.pitch
+            // Mirror puck position + current map camera to the launcher's live map widget (see
+            // NavigationManager.widgetLocationMatcherResult/widgetCamera, consumed by
+            // MapWidgetSurfaceService). This runs continuously (trip session is always active,
+            // see onAttached below) so the widget shows map + puck even when idle, matching
+            // NaviFragment's own puck/camera exactly - real GPS or simulated replay alike.
+            NavigationManager.updateWidgetLocationMatcherResult(locationMatcherResult)
+            val widgetCameraState = binding.mapView.mapboxMap.cameraState
+            NavigationManager.updateWidgetCamera(
+                NavigationManager.WidgetCameraSnapshot(
+                    center = widgetCameraState.center,
+                    zoom = widgetCameraState.zoom,
+                    bearing = widgetCameraState.bearing,
+                    pitch = widgetCameraState.pitch
                 )
-            }
+            )
             //update location when simulate
             if (isLocationConnected) {
                 mockLocationUpdateJob?.cancel()
@@ -359,12 +357,17 @@ class NaviFragment : Fragment() {
             stepRoad = stepRoad,
             stepDistanceRemaining = stepDistanceRemaining,
             maneuverType = maneuverType,
-            maneuverModifier = maneuverModifier
+            maneuverModifier = maneuverModifier,
+            fractionTraveled = routeProgress.fractionTraveled.toDouble()
         )
         NavigationManager.updateProgress(
             routeProgress.distanceRemaining.toDouble(),
             routeProgress.durationRemaining.toInt()
         )
+        // Drives the launcher widget's maneuver+trip-progress card (see
+        // MapWidgetSurfaceService.progressJob) - non-null here means "route active", which is
+        // exactly the card's visibility condition.
+        NavigationManager.updateWidgetRouteProgress(routeProgress)
         sendNaviData()
 
         // update bottom trip progress summary
@@ -400,82 +403,9 @@ class NaviFragment : Fragment() {
         mFAutoShareDataManager?.onNaviDataReceived(navData)
     }
 
-    private fun startMapSnapshotLoop() {
-        if (mapSnapshotJob?.isActive == true) {
-            return
-        }
-        mapSnapshotJob = viewLifecycleOwner.lifecycleScope.launch {
-            while (isActive) {
-                captureMapSnapshot()
-                val status = NavigationManager.state.value.status
-                val intervalMs = if (status == NavigationStatus.SIMULATING_DRIVE ||
-                    status == NavigationStatus.ROUTE_SET
-                ) {
-                    MAP_SNAPSHOT_ACTIVE_INTERVAL_MS
-                } else {
-                    MAP_SNAPSHOT_IDLE_INTERVAL_MS
-                }
-                delay(intervalMs)
-            }
-        }
-    }
-
-    private fun stopMapSnapshotLoop() {
-        mapSnapshotJob?.cancel()
-        mapSnapshotJob = null
-        mapSnapshotCaptureInFlight = false
-    }
-
-    private fun captureMapSnapshot() {
-        if (mapSnapshotCaptureInFlight || _binding == null) {
-            return
-        }
-        mapSnapshotCaptureInFlight = true
-        binding.mapView.snapshot { bitmap ->
-            mapSnapshotCaptureInFlight = false
-            if (bitmap == null) {
-                return@snapshot
-            }
-            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
-                runCatching { publishMapSnapshot(bitmap) }
-                    .onFailure { error -> Log.w(TAG, "publishMapSnapshot failed", error) }
-            }
-        }
-    }
-
-    private suspend fun publishMapSnapshot(source: Bitmap) {
-        val scaled = try {
-            Bitmap.createScaledBitmap(
-                source, MAP_SNAPSHOT_WIDTH_PX, MAP_SNAPSHOT_HEIGHT_PX, true
-            )
-        } finally {
-            if (!source.isRecycled) {
-                source.recycle()
-            }
-        }
-        val jpegBytes = ByteArrayOutputStream().use { stream ->
-            scaled.compress(Bitmap.CompressFormat.JPEG, MAP_SNAPSHOT_JPEG_QUALITY, stream)
-            stream.toByteArray()
-        }
-        if (scaled !== source && !scaled.isRecycled) {
-            scaled.recycle()
-        }
-        val payload = JSONObject()
-            .put("channel", "map-snapshot")
-            .put("format", "jpeg")
-            .put("width", MAP_SNAPSHOT_WIDTH_PX)
-            .put("height", MAP_SNAPSHOT_HEIGHT_PX)
-            .put("data", Base64.encodeToString(jpegBytes, Base64.NO_WRAP))
-            .toString()
-        withContext(Dispatchers.Main) {
-            naviAIDL?.sendNaviData(payload)
-        }
-    }
-
     override fun onPause() {
         super.onPause()
         Log.i(TAG,"onPause()")
-        stopMapSnapshotLoop()
     }
 
     override fun onStop() {
@@ -509,9 +439,8 @@ class NaviFragment : Fragment() {
     }
 
     private val routesObserver = RoutesObserver { routeUpdateResult ->
-        // Mirror whatever routes were just set (or the empty list, on clear) into
-        // NavigationManager for the launcher's map widget to draw its own route line from.
-        // Read-only sampling; does not affect routeLineApi/routeLineView below.
+        // Mirror the raw route list to the widget regardless of branch below, so its route line
+        // clears the moment routes go empty instead of lagging behind the else-branch's own map.
         NavigationManager.updateWidgetRoutes(routeUpdateResult.navigationRoutes)
         if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
             routeTotalDistanceMeters = null
@@ -547,6 +476,12 @@ class NaviFragment : Fragment() {
             // remove the route reference from camera position evaluations
             viewportDataSource.clearRouteData()
             viewportDataSource.evaluate()
+
+            // Route gone - widget's maneuver/trip-progress card should hide (idle = map + puck
+            // only, see MapWidgetSurfaceService.progressJob). Do NOT clear
+            // widgetLocationMatcherResult/widgetCamera here: the puck and map position should
+            // stay exactly as they are at idle, not reset.
+            NavigationManager.updateWidgetRouteProgress(null)
         }
     }
 
@@ -645,7 +580,6 @@ class NaviFragment : Fragment() {
         mapMarkersManager = MapMarkersManager(binding.mapView, requireContext())
         sharedPreferences = SharePreferences.getPrefs(requireContext())
         isVoiceInstructionsMuted = audioViewModel.isVoiceInstructionsMuted
-        configureImeControlsVisibility()
         initView()
         initAction()
         initObserver()
@@ -670,7 +604,6 @@ class NaviFragment : Fragment() {
         viewportDataSource.evaluate()
         naviViewModel.connectService()
         audioViewModel.connectService()
-        startMapSnapshotLoop()
     }
 
     private fun initView() {
@@ -970,18 +903,6 @@ class NaviFragment : Fragment() {
         }
         binding.navigateHomeShortcut.setOnClickListener { startSavedPlaceNavigation(SavedPlace.HOME) }
         binding.navigateWorkShortcut.setOnClickListener { startSavedPlaceNavigation(SavedPlace.WORK) }
-    }
-
-    private fun configureImeControlsVisibility() {
-        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
-            binding.mapControls.visibility = if (insets.isVisible(WindowInsetsCompat.Type.ime())) {
-                View.GONE
-            } else {
-                View.VISIBLE
-            }
-            insets
-        }
-        ViewCompat.requestApplyInsets(binding.root)
     }
 
     private fun searchNow(query: String) {
@@ -1350,7 +1271,7 @@ class NaviFragment : Fragment() {
             MapStyleMode.LIGHT -> Style.LIGHT
             MapStyleMode.SATELLITE -> Style.SATELLITE
         }
-        loadMapStyle(styleUri)
+        loadMapStyle(styleUri, styleMode)
         if (persist) {
             SharePreferences.saveIntPreferences(
                 sharedPreferences.edit(),
@@ -1360,8 +1281,13 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private fun loadMapStyle(styleUri: String) {
+    private fun loadMapStyle(styleUri: String, styleMode: MapStyleMode) {
         binding.mapView.mapboxMap.loadStyle(styleUri) { style ->
+            if (styleMode == MapStyleMode.STANDARD_3D) {
+                style.setStyleImportConfigProperty("basemap", "lightPreset", Value("dawn"))
+                style.setStyleImportConfigProperty("basemap", "theme", Value("faded"))
+            }
+
             routeLineView.initializeLayers(style)
             val currentRoutes = mapboxNavigation.getNavigationRoutes()
             if (currentRoutes.isNotEmpty()) {
@@ -1528,11 +1454,6 @@ class NaviFragment : Fragment() {
         val MARKERS_BOTTOM_OFFSET = 176.0
         val MARKERS_EDGE_OFFSET = 64.0
         val PLACE_CARD_HEIGHT = 300.0
-        const val MAP_SNAPSHOT_WIDTH_PX = 400
-        const val MAP_SNAPSHOT_HEIGHT_PX = 284
-        const val MAP_SNAPSHOT_JPEG_QUALITY = 70
-        const val MAP_SNAPSHOT_ACTIVE_INTERVAL_MS = 2_000L
-        const val MAP_SNAPSHOT_IDLE_INTERVAL_MS = 8_000L
 
         val MARKERS_INSETS = EdgeInsets(
             MARKERS_EDGE_OFFSET, MARKERS_EDGE_OFFSET, MARKERS_BOTTOM_OFFSET, MARKERS_EDGE_OFFSET
