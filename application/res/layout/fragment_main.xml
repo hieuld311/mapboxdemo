@@ -17,6 +17,7 @@
         android:id="@+id/searchEntry"
         android:layout_width="310dp"
         android:layout_height="48dp"
+        app:cardBackgroundColor="#FFFFFF"
         android:layout_marginStart="10dp"
         android:layout_marginTop="10dp"
         app:cardCornerRadius="12dp"
@@ -42,8 +43,8 @@
                 android:paddingStart="14dp"
                 android:paddingEnd="6dp"
                 android:singleLine="true"
-                android:textColor="#0F172A"
-                android:textColorHint="#94A3B8"
+                android:textColor="#000000"
+                android:textColorHint="#666666"
                 android:textSize="14sp"
                 app:layout_constraintBottom_toBottomOf="parent"
                 app:layout_constraintEnd_toStartOf="@id/searchClear"
@@ -87,9 +88,9 @@
             android:minHeight="0dp"
             android:text="Home"
             android:textAllCaps="false"
-            android:textColor="#FF334155"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textColor="#000000"
+            android:textSize="14sp"
+            android:textStyle="normal" />
 
         <Button
             android:id="@+id/navigateWorkShortcut"
@@ -102,9 +103,9 @@
             android:minHeight="0dp"
             android:text="Work"
             android:textAllCaps="false"
-            android:textColor="#FF334155"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textColor="#000000"
+            android:textSize="14sp"
+            android:textStyle="normal" />
     </LinearLayout>
 
     <HorizontalScrollView
@@ -159,8 +160,8 @@
 
     <ImageView
         android:id="@+id/changeStyle"
-        android:layout_width="42dp"
-        android:layout_height="42dp"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_marginTop="10dp"
         android:layout_marginEnd="10dp"
         android:background="@drawable/bg_search_pill"
@@ -269,7 +270,7 @@
                             android:background="@android:color/transparent"
                             android:contentDescription="Back to suggestions"
                             android:padding="9dp"
-                            android:src="@android:drawable/ic_media_previous"
+                            android:src="@drawable/outline_arrow_back_ios_24"
                             app:tint="#334155" />
 
                         <TextView
@@ -393,6 +394,7 @@
         android:layout_marginEnd="10dp"
         android:layout_marginBottom="10dp"
         android:visibility="gone"
+        app:cardBackgroundColor="#FFFFFF"
         app:cardCornerRadius="12dp"
         app:cardElevation="10dp"
         app:cardUseCompatPadding="false"
@@ -405,19 +407,21 @@
         app:layout_constraintWidth_max="360dp"
         app:layout_constraintWidth_min="300dp">
 
-        <LinearLayout
+        <androidx.constraintlayout.widget.ConstraintLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:minHeight="88dp"
-            android:orientation="horizontal"
-            android:padding="8dp">
+            android:layout_height="88dp">
 
             <LinearLayout
+                android:id="@+id/tripInfoContainer"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
+                android:layout_height="0dp"
+                android:gravity="center_vertical"
+                android:orientation="vertical"
+                android:padding="8dp"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@id/speedLimitView"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toTopOf="parent">
 
                 <com.mapbox.navigation.ui.components.tripprogress.view.MapboxTripProgressView
                     android:id="@+id/tripProgressView"
@@ -435,9 +439,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:ellipsize="end"
                         android:includeFontPadding="false"
-                        android:maxLines="1"
                         android:text="0 km/h"
                         android:textColor="#334155"
                         android:textSize="10sp"
@@ -447,9 +449,7 @@
                         android:id="@+id/trafficStatusText"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:ellipsize="end"
                         android:includeFontPadding="false"
-                        android:maxLines="1"
                         android:text="Traffic route"
                         android:textColor="#15803D"
                         android:textSize="10sp"
@@ -462,101 +462,109 @@
                     android:layout_width="match_parent"
                     android:layout_height="5dp"
                     android:max="100"
-                    android:progress="0"
-                    android:progressTint="#2563EB"
-                    android:progressBackgroundTint="#DDE5EE" />
+                    android:progressBackgroundTint="#DDE5EE"
+                    android:progressTint="#2563EB" />
             </LinearLayout>
 
             <com.mapbox.navigation.ui.components.speedlimit.view.MapboxSpeedInfoView
                 android:id="@+id/speedLimitView"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:visibility="gone" />
+                android:layout_marginEnd="8dp"
+                android:visibility="gone"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toStartOf="@id/stop"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_goneMarginEnd="0dp" />
 
-            <Button
+            <androidx.appcompat.widget.AppCompatButton
                 android:id="@+id/stop"
-                android:layout_width="54dp"
-                android:layout_height="36dp"
-                android:layout_marginStart="8dp"
-                android:backgroundTint="#EF3340"
-                android:minHeight="0dp"
-                android:minWidth="0dp"
-                android:paddingHorizontal="4dp"
+                android:layout_width="80dp"
+                android:layout_height="0dp"
+                android:background="@drawable/bg_exit_panel"
                 android:text="Exit"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+                android:textSize="14sp"
+                android:textStyle="bold"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
+
     </androidx.cardview.widget.CardView>
 
     <LinearLayout
         android:id="@+id/mapControls"
-        android:layout_width="44dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginEnd="10dp"
         android:layout_marginBottom="10dp"
+        android:gravity="center_horizontal"
         android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <Button
+        <com.mapbox.navigation.ui.components.voice.view.MapboxSoundButton
+            android:id="@+id/soundButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
             android:id="@+id/zoomIn"
-            android:layout_width="44dp"
-            android:layout_height="40dp"
-            android:backgroundTint="#193049"
-            android:minHeight="0dp"
-            android:text="+"
-            android:textColor="#FFFFFF"
-            android:textSize="20sp" />
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:background="@drawable/bg_map_control_circle"
+            android:layout_marginTop="8dp"
+            android:contentDescription="Zoom in"
+            android:padding="10dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/baseline_zoom_in_24" />
 
-        <Button
+        <androidx.appcompat.widget.AppCompatImageButton
             android:id="@+id/zoomOut"
-            android:layout_width="44dp"
-            android:layout_height="40dp"
-            android:layout_marginTop="4dp"
-            android:backgroundTint="#193049"
-            android:minHeight="0dp"
-            android:text="−"
-            android:textColor="#FFFFFF"
-            android:textSize="20sp" />
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_map_control_circle"
+            android:contentDescription="Zoom out"
+            android:padding="10dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/baseline_zoom_out_24" />
 
-        <Button
-            android:id="@+id/mapRecenter"
-            android:layout_width="44dp"
-            android:layout_height="40dp"
-            android:layout_marginTop="4dp"
-            android:backgroundTint="#193049"
-            android:contentDescription="Reset or recenter map"
-            android:minHeight="0dp"
-            android:text="↻"
-            android:textColor="#FFFFFF"
-            android:textSize="17sp" />
+        <com.mapbox.navigation.ui.components.maps.camera.view.MapboxRecenterButton
+            android:id="@+id/recenter"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
     </LinearLayout>
 
-    <com.mapbox.navigation.ui.components.voice.view.MapboxSoundButton
-        android:id="@+id/soundButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/tripProgressCard"
-        app:layout_constraintEnd_toStartOf="@id/mapControls" />
+<!--    <com.mapbox.navigation.ui.components.voice.view.MapboxSoundButton-->
+<!--        android:id="@+id/soundButton"-->
+<!--        android:layout_width="wrap_content"-->
+<!--        android:layout_height="wrap_content"-->
+<!--        android:visibility="gone"-->
+<!--        app:layout_constraintBottom_toTopOf="@id/tripProgressCard"-->
+<!--        app:layout_constraintEnd_toStartOf="@id/mapControls" />-->
 
     <com.mapbox.navigation.ui.components.maps.camera.view.MapboxRouteOverviewButton
         android:id="@+id/routeOverview"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/soundButton"
-        app:layout_constraintEnd_toStartOf="@id/mapControls" />
+        app:layout_constraintBottom_toTopOf="@id/mapControls"
+        app:layout_constraintEnd_toEndOf="@id/mapControls"/>
 
-    <com.mapbox.navigation.ui.components.maps.camera.view.MapboxRecenterButton
-        android:id="@+id/recenter"
-        android:layout_width="wrap_content"
+    <com.mapbox.search.ui.view.place.SearchPlaceBottomSheetView
+        android:id="@+id/search_place_view"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:elevation="8dp"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/routeOverview"
-        app:layout_constraintEnd_toStartOf="@id/mapControls" />
-
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>
