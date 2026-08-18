@@ -72,22 +72,13 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         focusShadowImage = itemView.findViewById(R.id.focusShadowImage);
         mapSurfaceCoordinator = NavMapSurfaceCoordinator.getInstance(itemView.getContext());
 
-        // A plain itemView detach might just be RecyclerView scrap churn (notifyDataSetChanged()
-        // fires on every TBT data push, see HomeCardMapSurfaceController's class doc) rather than
-        // a real recycle - releaseDebounced() absorbs that instead of tearing the surface down
-        // and immediately re-requesting it.
-        itemView.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
-            @Override
-            public void onViewAttachedToWindow(View v) {
-                // No-op: bind() (called separately by the adapter) is what re-attaches the
-                // surface, and it already cancels any pending debounced release itself.
-            }
-
-            @Override
-            public void onViewDetachedFromWindow(View v) {
-                mapSurfaceCoordinator.releaseDebounced();
-            }
-        });
+        // Deliberately no release-on-detach here: the live map session is meant to stay warm
+        // across ordinary RecyclerView churn (a swipe genuinely detaching this itemView, or
+        // scrap reuse from a data-only rebind) so swiping back to the nav card shows it
+        // instantly instead of rebuilding MapWidgetSurfaceService's MapView from scratch. See
+        // applyFocusState()/attachNavMapSurface() - the only release paths left are
+        // ensureCardLayout() (this ViewHolder's view tree is being reused for a different card
+        // type) and IviLauncher.onDestroy() (activity teardown).
     }
 
     public void bind(HomeCardItem item, int adapterPosition, boolean focused, boolean animate) {
@@ -453,11 +444,11 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (focusView == null) return;
 
         // Live embedded map (API 32+ only - see HomeCardMapSurfaceController/
-        // NavMapSurfaceCoordinator) attach/release is driven entirely by focus transitions now
-        // (see attachNavMapSurface()/releaseNavMapSurface(), called from applyFocusState()) -
-        // not from every bind() here, so a routine data-only rebind while already focused never
-        // touches the map surface, and a card only ever requests a surface once it has actually
-        // finished becoming the focused card.
+        // NavMapSurfaceCoordinator) attach is driven entirely by focus transitions now (see
+        // attachNavMapSurface(), called from applyFocusState()) - not from every bind() here, so
+        // a routine data-only rebind while already focused never touches the map surface, and a
+        // card only ever requests a surface once it has actually finished becoming the focused
+        // card.
 
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         View tbtView = focusView.findViewById(R.id.navFocusTbtView);
@@ -590,23 +581,23 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         }
         // Every path that changes focus state - instant bind, a completed grow animation, or a
         // completed/skipped collapse - funnels through here once the state is actually settled,
-        // so this is the single point where the live map surface tracks focus: attach only once
-        // this card has fully become focused (never mid-transform), release the moment it stops
-        // being focused (e.g. immediately when the user swipes away), instead of waiting on the
-        // itemView's own attach-to-window signal, which lags far behind a real swipe gesture.
-        if (currentType == HomeCardItem.TYPE_NAVIGATION) {
-            if (focused) {
-                attachNavMapSurface();
-            } else {
-                releaseNavMapSurface();
-            }
+        // so this is the single point where becoming focused (re)attaches the live map surface.
+        // Deliberately no release counterpart when losing focus - see attachNavMapSurface() and
+        // the constructor comment: the session stays warm across ordinary focus/scroll churn
+        // instead of being torn down and rebuilt every time the user swipes away and back.
+        if (currentType == HomeCardItem.TYPE_NAVIGATION && focused) {
+            attachNavMapSurface();
         }
     }
 
     /**
      * Requests the live embedded map surface for this card's SurfaceView. Only called once this
      * card has fully become the focused nav card (see applyFocusState()), so the widget never
-     * attaches to a SurfaceView whose on-screen bounds/transform are still mid-animation.
+     * attaches to a SurfaceView whose on-screen bounds/transform are still mid-animation. A
+     * no-op if this SurfaceView already holds the live surface (see
+     * HomeCardMapSurfaceController#bind) - which is the common case once the session has been
+     * left running from a prior focus, so re-focusing shows it instantly instead of rebuilding
+     * MapWidgetSurfaceService's MapView from scratch.
      */
     private void attachNavMapSurface() {
         View focusView = focusSlot.getChildCount() > 0 ? focusSlot.getChildAt(0) : null;
@@ -615,11 +606,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (mapSurface != null) {
             mapSurfaceCoordinator.bind(mapSurface);
         }
-    }
-
-    /** Releases the live embedded map surface as soon as this card stops being focused. */
-    private void releaseNavMapSurface() {
-        mapSurfaceCoordinator.release();
     }
 
     private void animateFocusState(boolean focused) {
