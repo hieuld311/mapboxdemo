@@ -107,8 +107,12 @@ class MapWidgetSurfaceService : Service() {
         // mapView.location in setupMapView()/release() below.
         val onPositionChangedListener = OnIndicatorPositionChangedListener { point ->
             val result = routeLineApi.updateTraveledRouteLine(point)
-            mapView.mapboxMap.style?.apply {
-                routeLineView.renderRouteLineUpdate(this, result)
+            val style = mapView.mapboxMap.style
+            if (style == null) {
+                Log.w(TAG, "onPositionChangedListener: style not loaded yet, skipping vanishing redraw")
+            } else {
+                Log.d(TAG, "onPositionChangedListener: updating traveled route line at $point")
+                routeLineView.renderRouteLineUpdate(style, result)
             }
         }
         val maneuverView: MapboxManeuverView = MapboxManeuverView(themedContext())
@@ -221,7 +225,12 @@ class MapWidgetSurfaceService : Service() {
 
                     session.routesJob = serviceScope.launch {
                         NavigationManager.widgetRoutes.collectLatest { routes ->
-                            val style = session.mapView.mapboxMap.style ?: return@collectLatest
+                            val style = session.mapView.mapboxMap.style
+                            if (style == null) {
+                                Log.w(TAG, "routesJob: style not loaded yet, skipping render of ${routes.size} route(s)")
+                                return@collectLatest
+                            }
+                            Log.d(TAG, "routesJob: rendering ${routes.size} route(s)")
                             if (routes.isNotEmpty()) {
                                 session.routeLineApi.setNavigationRoutes(routes) { value ->
                                     session.routeLineView.renderRouteDrawData(style, value)
@@ -359,6 +368,7 @@ class MapWidgetSurfaceService : Service() {
         }
 
         session.mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
+            Log.i(TAG, "setupMapView: style loaded successfully")
             session.routeLineView.initializeLayers(style)
             // The routesJob collector (started right after this call) handles every route
             // change from here on, but it's a StateFlow with no guaranteed ordering against
