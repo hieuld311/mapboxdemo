@@ -41,10 +41,9 @@ public final class HomeCardItem {
     public String naviRemainingDistance = "";
     public String naviRemainingUnit = "";
     public int naviEtaMinutes = 0;
-    // Overall route fraction traveled, scaled 0-1000 (see
-    // HomeNaviDataProvider#percentTraveledToProgress) - drives the compact card's live progress
-    // bar (see HomeCardViewHolder#bindNaviCompactCard).
-    public int naviPercentTraveled = 0;
+    // Periodic map snapshot (~every 3s, from the app's MapSnapshotter, see
+    // HomeNaviDataProvider) - shown only on the focus card, see HomeCardViewHolder.
+    public Bitmap naviMapSnapshot;
 
     public HomeCardItem(int type) {
         this.type = type;
@@ -75,7 +74,7 @@ public final class HomeCardItem {
         copy.naviRemainingDistance = naviRemainingDistance;
         copy.naviRemainingUnit = naviRemainingUnit;
         copy.naviEtaMinutes = naviEtaMinutes;
-        copy.naviPercentTraveled = naviPercentTraveled;
+        copy.naviMapSnapshot = naviMapSnapshot;
         return copy;
     }
 }

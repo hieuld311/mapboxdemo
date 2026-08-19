@@ -208,6 +208,15 @@ public class HomeCardDataRepository implements HomeMediaSessionProvider.Listener
     public void onNaviDataChanged(@NonNull HomeNaviDataProvider.NaviInfo info) {
         HomeCardItem item = findCard(HomeCardItem.TYPE_NAVIGATION);
         if (item == null) return;
+
+        if (info.isSnapshotUpdate) {
+            // A snapshot tick carries no TBT text data - only touch the map image so it
+            // can't blank out whatever the TBT channel last set on this item.
+            item.naviMapSnapshot = info.mapSnapshot;
+            notifyChanged();
+            return;
+        }
+
         item.naviActive = info.active;
         item.naviTurnType = info.turnType;
         item.naviStepDistance = info.stepDistance;
@@ -217,7 +226,6 @@ public class HomeCardDataRepository implements HomeMediaSessionProvider.Listener
         item.naviRemainingDistance = info.remainingDistance;
         item.naviRemainingUnit = info.remainingUnit;
         item.naviEtaMinutes = info.etaMinutes;
-        item.naviPercentTraveled = info.percentTraveled;
         notifyChanged();
     }
 

@@ -3,9 +3,8 @@ package com.ivi.launcher.view.viewholder;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
-import android.os.Build;
+import android.graphics.Bitmap;
 import android.view.LayoutInflater;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.AccelerateDecelerateInterpolator;
@@ -21,7 +20,6 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.ivi.launcher.R;
 import com.ivi.launcher.constant.HomeCardItem;
 import com.ivi.launcher.constant.HomeCarouselConfig;
-import com.ivi.launcher.model.home.NavMapSurfaceCoordinator;
 import com.ivi.launcher.view.adapter.HomeCarouselAdapter;
 
 public class HomeCardViewHolder extends RecyclerView.ViewHolder {
@@ -47,24 +45,17 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     private final FrameLayout focusSlot;
     private final View focusShadowImage;
     private final LayoutInflater inflater;
-    // Process-wide singleton (see class doc) - never a per-ViewHolder controller, so any number
-    // of TYPE_NAVIGATION ViewHolder instances the RecyclerView keeps around always share exactly
-    // one live map-widget session. Does not touch HomeCarouselAdapter.java.
-    private final NavMapSurfaceCoordinator mapSurfaceCoordinator;
 
     private ValueAnimator runningAnimator;
     private int currentType = -1;
     private int boundAdapterPosition = RecyclerView.NO_POSITION;
-    // Cached nav compact/focus views (and crucially, the SurfaceView inside the focus one) - see
-    // ensureCardLayout(). Reused whenever this ViewHolder switches back to TYPE_NAVIGATION
-    // instead of inflating fresh ones, so HomeCarouselAdapter's lack of stable IDs (a
-    // notifyDataSetChanged() pass, fired on every compact-card data push, can reassign this
-    // ViewHolder to a different card type for one bind and back to nav on the very next) doesn't
-    // hand attachNavMapSurface() a brand-new SurfaceView every time - HomeCardMapSurfaceController
-    // can't recognize a new instance as already-attached, forcing a full
-    // MapWidgetSurfaceService rebuild (a visible black flash) on essentially every compact update.
-    private View cachedNavCompactView;
-    private View cachedNavFocusView;
+    // Nav focus card's map image + the bitmap waiting to be shown on it. Set in
+    // bindNaviFocusCard() (called from bindCardData(), before the focus-state animation
+    // decision), consumed in applyFocusState() - see that method for why the actual
+    // setImageBitmap()/visibility toggle is deferred there instead of done immediately here.
+    private ImageView navFocusMapImage;
+    private Bitmap pendingNavMapSnapshot;
+    private boolean pendingNavActive;
 
     public HomeCardViewHolder(
             @NonNull View itemView,
@@ -80,15 +71,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         focusLayer = itemView.findViewById(R.id.focusLayer);
         focusSlot = itemView.findViewById(R.id.focusSlot);
         focusShadowImage = itemView.findViewById(R.id.focusShadowImage);
-        mapSurfaceCoordinator = NavMapSurfaceCoordinator.getInstance(itemView.getContext());
-
-        // Deliberately no release-on-detach here: the live map session is meant to stay warm
-        // across ordinary RecyclerView churn (a swipe genuinely detaching this itemView, a data-
-        // only rebind, or even a brief type switch-away-and-back - see cachedNavFocusView) so
-        // swiping back to the nav card shows it instantly instead of rebuilding
-        // MapWidgetSurfaceService's MapView from scratch. See applyFocusState()/
-        // attachNavMapSurface() - the only remaining release path is IviLauncher.onDestroy()
-        // (activity teardown).
     }
 
     public void bind(HomeCardItem item, int adapterPosition, boolean focused, boolean animate) {
@@ -109,22 +91,8 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         currentType = type;
         compactSlot.removeAllViews();
         focusSlot.removeAllViews();
-
-        View compactView;
-        View focusView;
-        if (type == HomeCardItem.TYPE_NAVIGATION && cachedNavFocusView != null) {
-            // Reuse the cached nav views (see field doc) instead of inflating fresh ones -
-            // keeps the same SurfaceView instance alive across a type switch-away-and-back.
-            compactView = cachedNavCompactView;
-            focusView = cachedNavFocusView;
-        } else {
-            compactView = inflater.inflate(getCompactLayoutRes(type), compactSlot, false);
-            focusView = inflater.inflate(getFocusLayoutRes(type), focusSlot, false);
-            if (type == HomeCardItem.TYPE_NAVIGATION) {
-                cachedNavCompactView = compactView;
-                cachedNavFocusView = focusView;
-            }
-        }
+        View compactView = inflater.inflate(getCompactLayoutRes(type), compactSlot, false);
+        View focusView = inflater.inflate(getFocusLayoutRes(type), focusSlot, false);
         compactSlot.addView(compactView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -438,7 +406,7 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (progressBar != null) {
             progressBar.setMax(1000);
             progressBar.setIndeterminate(false);
-            progressBar.setProgress(item.naviPercentTraveled);
+            progressBar.setProgress(0);
         }
         if (remainingView != null) {
             if (!isEmpty(item.naviRemainingDistance)) {
@@ -461,69 +429,21 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         View focusView = focusSlot.getChildCount() > 0 ? focusSlot.getChildAt(0) : null;
         if (focusView == null) return;
 
-        // Live embedded map (API 32+ only - see HomeCardMapSurfaceController/
-        // NavMapSurfaceCoordinator) attach is driven entirely by focus transitions now (see
-        // attachNavMapSurface(), called from applyFocusState()) - not from every bind() here, so
-        // a routine data-only rebind while already focused never touches the map surface, and a
-        // card only ever requests a surface once it has actually finished becoming the focused
-        // card.
-
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
-        View tbtView = focusView.findViewById(R.id.navFocusTbtView);
-
-        // On API 32+ the live widget already renders its own maneuver + trip-progress card
-        // baked into the surface (see MapWidgetSurfaceService's progressCard), gated on the nav
-        // app's own route-active state - showing the launcher's static text card on top would
-        // duplicate it, so both static states are suppressed here. Below API 32 (no live
-        // surface at all, see HomeCardMapSurfaceController#bind), fall back to the original
-        // static default/TBT text views driven by item.naviActive.
-        if (Build.VERSION.SDK_INT >= 32) {
-            if (defaultView != null) defaultView.setVisibility(View.GONE);
-            if (tbtView != null) tbtView.setVisibility(View.GONE);
-            return;
-        }
+        navFocusMapImage = focusView.findViewById(R.id.navFocusMapImage);
+        pendingNavMapSnapshot = item.naviMapSnapshot;
+        pendingNavActive = item.naviActive;
 
         if (!item.naviActive) {
             if (defaultView != null) defaultView.setVisibility(View.VISIBLE);
-            if (tbtView != null) tbtView.setVisibility(View.GONE);
+            if (navFocusMapImage != null) navFocusMapImage.setVisibility(View.GONE);
             return;
         }
 
         if (defaultView != null) defaultView.setVisibility(View.GONE);
-        if (tbtView != null) tbtView.setVisibility(View.VISIBLE);
-
-        ImageView turnIcon = tbtView.findViewById(R.id.navFocusTurnIcon);
-        TextView directionView = tbtView.findViewById(R.id.navFocusDirection);
-        TextView distanceView = tbtView.findViewById(R.id.navFocusDistance);
-        TextView roadView = tbtView.findViewById(R.id.navFocusRoad);
-        TextView destView = tbtView.findViewById(R.id.navFocusDestination);
-
-        if (turnIcon != null) {
-            int iconRes = getTurnIconRes(item.naviTurnType);
-            if (iconRes != 0) {
-                turnIcon.setImageResource(iconRes);
-            } else {
-                turnIcon.setImageDrawable(null);
-            }
-        }
-        if (directionView != null) {
-            directionView.setText(formatTurnType(item.naviTurnType));
-        }
-        if (distanceView != null) {
-            String unit = formatDistanceUnit(item.naviStepUnit);
-            distanceView.setText(item.naviStepDistance + " " + unit);
-        }
-        if (roadView != null) {
-            roadView.setText(item.naviStepRoad);
-        }
-        if (destView != null) {
-            if (isEmpty(item.naviDestination)) {
-                destView.setVisibility(View.GONE);
-            } else {
-                destView.setVisibility(View.VISIBLE);
-                destView.setText(item.naviDestination);
-            }
-        }
+        // navFocusMapImage's bitmap/visibility is applied from applyFocusState(), not here -
+        // see that method's doc for why showing it is deferred until the focus state (and any
+        // grow animation) has actually settled.
     }
 
     private String formatDistanceUnit(String unit) {
@@ -549,21 +469,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             case "DESTINATION":       return R.drawable.ico_launcher_turn_by_turn_turn_finish_s;
             default:                  return R.drawable.ico_launcher_turn_by_turn_unknown_s;
         }
-    }
-
-    private String formatTurnType(String turnType) {
-        if (isEmpty(turnType)) return "";
-        String spaced = turnType.replace("_", " ");
-        String[] words = spaced.split(" ");
-        StringBuilder result = new StringBuilder();
-        for (String word : words) {
-            if (!word.isEmpty()) {
-                result.append(Character.toUpperCase(word.charAt(0)));
-                result.append(word.substring(1).toLowerCase());
-                result.append(" ");
-            }
-        }
-        return result.toString().trim();
     }
 
     private void applyFocusState(boolean focused) {
@@ -597,32 +502,18 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             compactShadowImage.setVisibility(View.VISIBLE);
             compactShadowImage.setAlpha(1f);
         }
-        // Every path that changes focus state - instant bind, a completed grow animation, or a
-        // completed/skipped collapse - funnels through here once the state is actually settled,
-        // so this is the single point where becoming focused (re)attaches the live map surface.
-        // Deliberately no release counterpart when losing focus - see attachNavMapSurface() and
-        // the constructor comment: the session stays warm across ordinary focus/scroll churn
-        // instead of being torn down and rebuilt every time the user swipes away and back.
-        if (currentType == HomeCardItem.TYPE_NAVIGATION && focused) {
-            attachNavMapSurface();
-        }
-    }
-
-    /**
-     * Requests the live embedded map surface for this card's SurfaceView. Only called once this
-     * card has fully become the focused nav card (see applyFocusState()), so the widget never
-     * attaches to a SurfaceView whose on-screen bounds/transform are still mid-animation. A
-     * no-op if this SurfaceView already holds the live surface (see
-     * HomeCardMapSurfaceController#bind) - which is the common case once the session has been
-     * left running from a prior focus, so re-focusing shows it instantly instead of rebuilding
-     * MapWidgetSurfaceService's MapView from scratch.
-     */
-    private void attachNavMapSurface() {
-        View focusView = focusSlot.getChildCount() > 0 ? focusSlot.getChildAt(0) : null;
-        if (focusView == null) return;
-        SurfaceView mapSurface = focusView.findViewById(R.id.navFocusMapSurface);
-        if (mapSurface != null) {
-            mapSurfaceCoordinator.bind(mapSurface);
+        // Every path that changes focus state - instant bind, or a completed grow/collapse
+        // animation (see animateFocusState()/animateUnfocusState(), both of which call back into
+        // this method once settled) - funnels through here. This is the single point where the
+        // nav map image actually gets shown: only once this card has fully become focused, never
+        // mid-animation, so a fresh snapshot never "pops in" while the card is still growing.
+        if (currentType == HomeCardItem.TYPE_NAVIGATION && navFocusMapImage != null) {
+            if (focused && pendingNavActive && pendingNavMapSnapshot != null) {
+                navFocusMapImage.setImageBitmap(pendingNavMapSnapshot);
+                navFocusMapImage.setVisibility(View.VISIBLE);
+            } else {
+                navFocusMapImage.setVisibility(View.GONE);
+            }
         }
     }
 
@@ -716,19 +607,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     private void animateUnfocusState() {
         if (runningAnimator != null) {
             runningAnimator.cancel();
-        }
-        if (host.getCarouselScrollState() != RecyclerView.SCROLL_STATE_IDLE) {
-            // A drag/fling is already repositioning this item via RecyclerView's own touch/scroll
-            // handling. Unlike animateFocusState() (which locks touch via
-            // host.beginFocusTransitionAnimator() while it runs), this collapse path is triggered
-            // mid-drag by IviLauncher's SCROLL_STATE_DRAGGING listener and is never touch-locked -
-            // animating cardRoot's width frame-by-frame below would race that concurrent
-            // touch-driven scroll, which is what makes the shrinking card visually land on top of
-            // a neighboring card during a swipe. Snap straight to the compact state instead; the
-            // user's own gesture is already supplying the motion.
-            runningAnimator = null;
-            applyFocusState(false);
-            return;
         }
         final float endSlotScaleX = getStartSlotScaleX();
         final float endSlotScaleY = getStartSlotScaleY();

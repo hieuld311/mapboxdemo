@@ -4,9 +4,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -18,10 +21,14 @@ import com.ivi.car.navigation.INaviListener;
 import com.ivi.car.navigation.NaviAidlInterface;
 import com.ivi.launcher.model.Navigation;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 public class HomeNaviDataProvider {
     private static final String TAG = "HomeNaviDataProvider";
     private static final String NAVI_SERVICE_ACTION = "com.ivi.car.navigation.service.NaviAIDLService";
     private static final String NAVI_PACKAGE = "com.ivi.car.navigation";
+    private static final String CHANNEL_MAP_SNAPSHOT = "map-snapshot";
 
     public interface Listener {
         void onNaviDataChanged(@NonNull NaviInfo info);
@@ -37,14 +44,23 @@ public class HomeNaviDataProvider {
         public final String remainingDistance;
         public final String remainingUnit;
         public final int etaMinutes;
-        // Overall route fraction traveled, scaled 0-1000 to match ProgressBar's max (see
-        // percentTraveledToProgress below) - drives the compact card's live progress bar.
-        public final int percentTraveled;
+        // True only for a "map-snapshot" channel update - see HomeCardDataRepository, which
+        // uses this to touch only HomeCardItem.naviMapSnapshot and leave the TBT text fields
+        // (all of the above) untouched, since a snapshot tick carries none of them.
+        public final boolean isSnapshotUpdate;
+        @Nullable public final Bitmap mapSnapshot;
 
         public NaviInfo(boolean active, String turnType, String stepDistance,
                 String stepUnit, String stepRoad, String destination,
+                String remainingDistance, String remainingUnit, int etaMinutes) {
+            this(active, turnType, stepDistance, stepUnit, stepRoad, destination,
+                    remainingDistance, remainingUnit, etaMinutes, false, null);
+        }
+
+        private NaviInfo(boolean active, String turnType, String stepDistance,
+                String stepUnit, String stepRoad, String destination,
                 String remainingDistance, String remainingUnit, int etaMinutes,
-                int percentTraveled) {
+                boolean isSnapshotUpdate, @Nullable Bitmap mapSnapshot) {
             this.active = active;
             this.turnType = turnType != null ? turnType : "";
             this.stepDistance = stepDistance != null ? stepDistance : "";
@@ -54,11 +70,16 @@ public class HomeNaviDataProvider {
             this.remainingDistance = remainingDistance != null ? remainingDistance : "";
             this.remainingUnit = remainingUnit != null ? remainingUnit : "";
             this.etaMinutes = etaMinutes;
-            this.percentTraveled = percentTraveled;
+            this.isSnapshotUpdate = isSnapshotUpdate;
+            this.mapSnapshot = mapSnapshot;
         }
 
         public static NaviInfo idle() {
-            return new NaviInfo(false, "", "", "", "", "", "", "", 0, 0);
+            return new NaviInfo(false, "", "", "", "", "", "", "", 0);
+        }
+
+        public static NaviInfo snapshot(@NonNull Bitmap bitmap) {
+            return new NaviInfo(false, "", "", "", "", "", "", "", 0, true, bitmap);
         }
     }
 
@@ -73,6 +94,10 @@ public class HomeNaviDataProvider {
     private final INaviListener.Stub mNaviListener = new INaviListener.Stub() {
         @Override
         public void onNaviDataReceived(String jsonString) {
+            if (isMapSnapshotChannel(jsonString)) {
+                handleMapSnapshot(jsonString);
+                return;
+            }
             Log.d(TAG, "onNaviDataReceived: " + jsonString);
             try {
                 Navigation nav = mGson.fromJson(jsonString, Navigation.class);
@@ -89,12 +114,42 @@ public class HomeNaviDataProvider {
                         nav.getDestination(),
                         formatDistance(nav.getDistance()),
                         nav.getDistanceUnit(),
-                        durationToMinutes(nav.getDuration()),
-                        percentTraveledToProgress(nav.getPercentTraveled())
+                        durationToMinutes(nav.getDuration())
                 );
                 mMainHandler.post(() -> mListener.onNaviDataChanged(info));
             } catch (JsonSyntaxException e) {
                 Log.e(TAG, "onNaviDataReceived: JSON parse error", e);
+            }
+        }
+
+        // Peeks the envelope's top-level "channel" field without fully parsing the payload as
+        // either shape, so the existing TBT ("turn-by-turn") path below is unaffected.
+        private boolean isMapSnapshotChannel(String jsonString) {
+            try {
+                JSONObject envelope = new JSONObject(jsonString);
+                return CHANNEL_MAP_SNAPSHOT.equals(envelope.optString("channel", null));
+            } catch (JSONException e) {
+                return false;
+            }
+        }
+
+        private void handleMapSnapshot(String jsonString) {
+            try {
+                JSONObject envelope = new JSONObject(jsonString);
+                JSONObject data = envelope.getJSONObject("data");
+                String base64 = data.getString("bitmap");
+                byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                if (bitmap == null) {
+                    Log.w(TAG, "handleMapSnapshot: decodeByteArray returned null");
+                    return;
+                }
+                NaviInfo info = NaviInfo.snapshot(bitmap);
+                mMainHandler.post(() -> mListener.onNaviDataChanged(info));
+            } catch (JSONException e) {
+                Log.e(TAG, "handleMapSnapshot: JSON parse error", e);
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "handleMapSnapshot: base64 decode error", e);
             }
         }
     };
@@ -175,11 +230,5 @@ public class HomeNaviDataProvider {
         if (durationSeconds <= 0) return 0;
         int minutes = durationSeconds / 60;
         return minutes < 1 ? 1 : minutes;
-    }
-
-    /** Clamps a 0.0-1.0 fraction and scales it to 0-1000, matching ProgressBar's max. */
-    private static int percentTraveledToProgress(double fraction) {
-        double clamped = Math.max(0.0, Math.min(1.0, fraction));
-        return (int) Math.round(clamped * 1000);
     }
 }

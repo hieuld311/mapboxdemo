@@ -7,8 +7,10 @@ import android.app.Service
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.IBinder
+import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import com.google.gson.Gson
@@ -16,11 +18,17 @@ import com.ivi.car.navigation.controller.NavigationManager
 import com.ivi.car.navigation.model.Navigation
 import com.ivi.car.navigation.ui.MainActivity
 import com.ivi.car.navigation.util.Utils
+import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
+import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.MapSnapshotInterface
+import com.mapbox.maps.MapSnapshotOptions
+import com.mapbox.maps.Size
+import com.mapbox.maps.Snapshotter
+import com.mapbox.maps.Style
 import com.mapbox.navigation.base.trip.model.RouteProgressState
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.MapboxNavigationProvider
-import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
@@ -29,7 +37,15 @@ import dagger.hilt.android.AndroidEntryPoint
 import fauto.car.FAutoCar
 import fauto.car.clustercontrol.FAutoCarClusterControlManager
 import fauto.car.sharedata.FAutoShareDataManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -44,15 +60,23 @@ class NavigationService: Service() {
     private var carClusterManager: FAutoCarClusterControlManager? = null
     private var gson: Gson? = null
     private var routeObserverRegistered = false
-    // Feed NavigationManager's widgetXxx mirror (consumed by MapWidgetSurfaceService for the
-    // launcher's live map widget) independently of NaviFragment - NaviFragment's own observers
-    // only run while it is resumed (see requireMapboxNavigation's onResumedObserver), so without
-    // this the widget freezes the moment the user leaves the app to look at the home screen,
-    // which is exactly when the widget is meant to be useful. Does not touch NaviFragment or its
-    // observers.
-    private var widgetRoutesObserverRegistered = false
-    private var widgetLocationObserverRegistered = false
     private var carConnectionRequested = false
+
+    // Periodic map-snapshot capture (see startMapSnapshotLoop()/captureSnapshot()) - runs
+    // independently of NaviFragment so the launcher's focus-card image keeps updating even
+    // while the app UI isn't visible, matching this service's own always-alive lifecycle.
+    private val snapshotScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var snapshotter: Snapshotter? = null
+    private var snapshotJob: Job? = null
+    private var locationObserverRegistered = false
+    private var latestSnapshotLocation: Location? = null
+
+    private val snapshotLocationObserver = object : LocationObserver {
+        override fun onNewRawLocation(rawLocation: Location) {}
+        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
+            latestSnapshotLocation = locationMatcherResult.enhancedLocation
+        }
+    }
 
     private val serviceConnection: ServiceConnection = object: ServiceConnection{
         override fun onServiceConnected(
@@ -96,14 +120,11 @@ class NavigationService: Service() {
                 mapboxNavigation.registerRouteProgressObserver(routeProgressObserver)
                 routeObserverRegistered = true
             }
-            if (!widgetRoutesObserverRegistered) {
-                mapboxNavigation.registerRoutesObserver(widgetRoutesObserver)
-                widgetRoutesObserverRegistered = true
+            if (!locationObserverRegistered) {
+                mapboxNavigation.registerLocationObserver(snapshotLocationObserver)
+                locationObserverRegistered = true
             }
-            if (!widgetLocationObserverRegistered) {
-                mapboxNavigation.registerLocationObserver(widgetLocationObserver)
-                widgetLocationObserverRegistered = true
-            }
+            startMapSnapshotLoop()
 
             Log.i(TAG, "Service đã kết nối vào Navigation Session có sẵn")
         } else {
@@ -176,9 +197,6 @@ class NavigationService: Service() {
             routeProgress.distanceRemaining.toDouble(),
             routeProgress.durationRemaining.toInt()
         )
-        // Widget mirror (see widgetRoutesObserver/widgetLocationObserver below) - keeps the
-        // launcher's maneuver/trip-progress card live while NaviFragment isn't resumed.
-        NavigationManager.updateWidgetRouteProgress(routeProgress)
         val canUpdate =
             previousStepRoad != navigation.getStepRoad() ||
                     kotlin.math.abs(previousStepDistance - navigation.getStepDistance()) >= 1.0 ||
@@ -194,12 +212,6 @@ class NavigationService: Service() {
 
         if (routeProgress.currentState == RouteProgressState.COMPLETE) {
             NavigationManager.stopNavigation()
-            // Explicit, not left to widgetRoutesObserver reacting to stopNavigation()'s route
-            // clear - unregisterObserver() a few lines below tears that observer down right
-            // after, which could race the reaction and leave the widget's maneuver/trip-progress
-            // card (and route line) stuck showing stale data indefinitely after arrival.
-            NavigationManager.updateWidgetRouteProgress(null)
-            NavigationManager.updateWidgetRoutes(emptyList())
             val destination = navigation.getDestination()
             navigation = Navigation().apply {
                 setDestination(destination)
@@ -216,48 +228,13 @@ class NavigationService: Service() {
         }
     }
 
-    // Widget mirror only (see field doc above) - NaviFragment.routesObserver still owns the
-    // in-app route line/camera/ensureNavigationServiceRunning() logic untouched, this just
-    // relays the same route-list change to NavigationManager's widget-facing state.
-    private val widgetRoutesObserver = RoutesObserver { routeUpdateResult ->
-        NavigationManager.updateWidgetRoutes(routeUpdateResult.navigationRoutes)
-        if (routeUpdateResult.navigationRoutes.isEmpty()) {
-            NavigationManager.updateWidgetRouteProgress(null)
-        }
-    }
-
-    // Widget mirror only. Puck position (widgetLocationMatcherResult) is relayed unconditionally
-    // - it is the same authoritative data NaviFragment's own locationObserver would relay, so
-    // there is nothing to fight over. Camera is different: while NaviFragment is resumed it
-    // already mirrors its own MapView's real cameraState (correctly reflecting overview/
-    // following/free-pan), which is strictly better than anything this headless service could
-    // approximate - so the synthetic follow-camera below only fires while MainActivity isn't
-    // running, to avoid the two sources fighting over widgetCamera when the app is foregrounded.
-    private val widgetLocationObserver = object : LocationObserver {
-        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
-            NavigationManager.updateWidgetLocationMatcherResult(locationMatcherResult)
-            if (!MainActivity.isRunning) {
-                val enhancedLocation = locationMatcherResult.enhancedLocation
-                NavigationManager.updateWidgetCamera(
-                    NavigationManager.WidgetCameraSnapshot(
-                        center = Point.fromLngLat(enhancedLocation.longitude, enhancedLocation.latitude),
-                        zoom = WIDGET_FOLLOWING_ZOOM,
-                        bearing = enhancedLocation.bearing?.toDouble() ?: 0.0,
-                        pitch = WIDGET_FOLLOWING_PITCH
-                    )
-                )
-            }
-        }
-
-        override fun onNewRawLocation(rawLocation: com.mapbox.common.location.Location) {}
-    }
-
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
 
     override fun onDestroy() {
         unregisterObserver()
+        snapshotScope.cancel()
         fAutoCar?.disconnect()
         fAutoCar = null
         carConnectionRequested = false
@@ -316,16 +293,64 @@ class NavigationService: Service() {
                 mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
                 routeObserverRegistered = false
             }
-            if (widgetRoutesObserverRegistered) {
-                mapboxNavigation.unregisterRoutesObserver(widgetRoutesObserver)
-                widgetRoutesObserverRegistered = false
-            }
-            if (widgetLocationObserverRegistered) {
-                mapboxNavigation.unregisterLocationObserver(widgetLocationObserver)
-                widgetLocationObserverRegistered = false
+            if (locationObserverRegistered) {
+                mapboxNavigation.unregisterLocationObserver(snapshotLocationObserver)
+                locationObserverRegistered = false
             }
             Log.i(TAG, "Đã hủy đăng ký observer và dừng Trip Session")
         }
+        stopMapSnapshotLoop()
+    }
+
+    private fun startMapSnapshotLoop() {
+        if (snapshotJob != null) return
+        val options = MapSnapshotOptions.Builder()
+            .size(Size(SNAPSHOT_WIDTH_DP, SNAPSHOT_HEIGHT_DP))
+            .pixelRatio(resources.displayMetrics.density)
+            .build()
+        snapshotter = Snapshotter(this, options).apply {
+            setStyleUri(Style.MAPBOX_STREETS)
+        }
+        snapshotJob = snapshotScope.launch {
+            while (true) {
+                delay(SNAPSHOT_INTERVAL_MS)
+                captureSnapshot()
+            }
+        }
+    }
+
+    private fun stopMapSnapshotLoop() {
+        snapshotJob?.cancel()
+        snapshotJob = null
+        snapshotter?.destroy()
+        snapshotter = null
+    }
+
+    private fun captureSnapshot() {
+        val location = latestSnapshotLocation ?: return
+        val activeSnapshotter = snapshotter ?: return
+        activeSnapshotter.setCamera(
+            CameraOptions.Builder()
+                .center(Point.fromLngLat(location.longitude, location.latitude))
+                .zoom(SNAPSHOT_ZOOM)
+                .bearing(location.bearing ?: 0.0)
+                .pitch(0.0)
+                .build()
+        )
+        activeSnapshotter.start { snapshot: MapSnapshotInterface? ->
+            snapshot?.bitmap()?.let { bitmap -> publishMapSnapshotToLauncher(bitmap) }
+        }
+    }
+
+    private fun publishMapSnapshotToLauncher(bitmap: Bitmap) {
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, SNAPSHOT_JPEG_QUALITY, outputStream)
+        val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+        val payload = JSONObject()
+            .put("channel", "map-snapshot")
+            .put("data", JSONObject().put("bitmap", base64))
+            .toString()
+        LauncherTurnByTurnBus.publish(payload)
     }
 
     private fun sendNavDataToSomeIp(navigation: Navigation) {
@@ -338,11 +363,14 @@ class NavigationService: Service() {
         }
     }
 
-    private companion object {
-        // Matches NaviFragment's own hardcoded following-camera values (updateCamera(), and the
-        // followingZoomPropertyOverride(17.0) applied when simulation starts) so the widget's
-        // synthetic background camera looks consistent with what the in-app map itself shows.
-        const val WIDGET_FOLLOWING_ZOOM = 17.0
-        const val WIDGET_FOLLOWING_PITCH = 60.0
+    companion object {
+        private const val SNAPSHOT_INTERVAL_MS = 3000L
+        private const val SNAPSHOT_ZOOM = 16.0
+        private const val SNAPSHOT_JPEG_QUALITY = 70
+        // Matches HomeCardViewHolder's FOCUS_APP_WIDTH_DP/FOCUS_APP_HEIGHT_DP (613x478dp) -
+        // capturing near the launcher's actual display size avoids wasted encode/decode/Binder
+        // payload cost; the launcher's ImageView still centerCrops regardless.
+        private const val SNAPSHOT_WIDTH_DP = 613f
+        private const val SNAPSHOT_HEIGHT_DP = 478f
     }
 }
