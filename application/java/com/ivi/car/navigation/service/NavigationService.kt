@@ -8,11 +8,16 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresPermission
+import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.ivi.car.navigation.controller.NavigationManager
 import com.ivi.car.navigation.model.Navigation
@@ -20,6 +25,7 @@ import com.ivi.car.navigation.ui.MainActivity
 import com.ivi.car.navigation.util.Utils
 import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
+import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapSnapshotInterface
 import com.mapbox.maps.MapSnapshotOptions
@@ -70,6 +76,13 @@ class NavigationService: Service() {
     private var snapshotJob: Job? = null
     private var locationObserverRegistered = false
     private var latestSnapshotLocation: Location? = null
+    private val routeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#2F76F2")
+        style = Paint.Style.STROKE
+        strokeWidth = ROUTE_LINE_WIDTH_PX
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
 
     private val snapshotLocationObserver = object : LocationObserver {
         override fun onNewRawLocation(rawLocation: Location) {}
@@ -309,7 +322,7 @@ class NavigationService: Service() {
             .pixelRatio(resources.displayMetrics.density)
             .build()
         snapshotter = Snapshotter(this, options).apply {
-            setStyleUri(Style.MAPBOX_STREETS)
+            setStyleUri(Style.STANDARD)
         }
         snapshotJob = snapshotScope.launch {
             while (true) {
@@ -329,17 +342,76 @@ class NavigationService: Service() {
     private fun captureSnapshot() {
         val location = latestSnapshotLocation ?: return
         val activeSnapshotter = snapshotter ?: return
+        val bearing = location.bearing ?: 0.0
         activeSnapshotter.setCamera(
             CameraOptions.Builder()
                 .center(Point.fromLngLat(location.longitude, location.latitude))
                 .zoom(SNAPSHOT_ZOOM)
-                .bearing(location.bearing ?: 0.0)
+                .bearing(bearing)
                 .pitch(0.0)
                 .build()
         )
+        // Route geometry captured now, at the same camera the snapshot renders with - the
+        // Snapshotter is a headless renderer with no LocationComponent/route-line plugin of its
+        // own, so the puck and route aren't part of the style; they're drawn onto the returned
+        // bitmap afterward using MapSnapshotInterface.pixelForCoordinate for the route and a
+        // fixed center point for the puck (the camera is always centered on the puck itself).
+        val routeGeometry = mapboxNavigation.getNavigationRoutes()
+            .firstOrNull()?.directionsRoute?.geometry()
         activeSnapshotter.start { snapshot: MapSnapshotInterface? ->
-            snapshot?.bitmap()?.let { bitmap -> publishMapSnapshotToLauncher(bitmap) }
+            val rawBitmap = snapshot?.bitmap() ?: return@start
+            publishMapSnapshotToLauncher(
+                annotateSnapshot(rawBitmap, snapshot, routeGeometry, bearing)
+            )
         }
+    }
+
+    private fun annotateSnapshot(
+        rawBitmap: Bitmap,
+        snapshot: MapSnapshotInterface,
+        routeGeometry: String?,
+        puckBearing: Double
+    ): Bitmap {
+        val bitmap = rawBitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(bitmap)
+
+        if (routeGeometry != null) {
+            val routePoints = PolylineUtils.decode(routeGeometry, ROUTE_GEOMETRY_PRECISION)
+            if (routePoints.size >= 2) {
+                val path = Path()
+                routePoints.forEachIndexed { index, point ->
+                    val screen = snapshot.pixelForCoordinate(point)
+                    if (index == 0) {
+                        path.moveTo(screen.x.toFloat(), screen.y.toFloat())
+                    } else {
+                        path.lineTo(screen.x.toFloat(), screen.y.toFloat())
+                    }
+                }
+                canvas.drawPath(path, routeLinePaint)
+            }
+        }
+
+        // The camera is always centered on latestSnapshotLocation, so the puck's screen
+        // position is always the bitmap's exact center - no pixelForCoordinate lookup needed.
+        drawPuck(canvas, bitmap.width / 2f, bitmap.height / 2f, puckBearing)
+        return bitmap
+    }
+
+    private fun drawPuck(canvas: Canvas, centerX: Float, centerY: Float, bearingDegrees: Double) {
+        val puckDrawable = ContextCompat.getDrawable(
+            this, com.mapbox.maps.R.drawable.mapbox_user_puck_icon
+        ) ?: return
+        val half = PUCK_SIZE_PX / 2f
+        canvas.save()
+        canvas.rotate(bearingDegrees.toFloat(), centerX, centerY)
+        puckDrawable.setBounds(
+            (centerX - half).toInt(),
+            (centerY - half).toInt(),
+            (centerX + half).toInt(),
+            (centerY + half).toInt()
+        )
+        puckDrawable.draw(canvas)
+        canvas.restore()
     }
 
     private fun publishMapSnapshotToLauncher(bitmap: Bitmap) {
@@ -372,5 +444,10 @@ class NavigationService: Service() {
         // payload cost; the launcher's ImageView still centerCrops regardless.
         private const val SNAPSHOT_WIDTH_DP = 613f
         private const val SNAPSHOT_HEIGHT_DP = 478f
+        // Directions API v5 default geometry precision (polyline6), matching the SDK's
+        // applyDefaultNavigationOptions() route request defaults used elsewhere in the app.
+        private const val ROUTE_GEOMETRY_PRECISION = 6
+        private const val ROUTE_LINE_WIDTH_PX = 10f
+        private const val PUCK_SIZE_PX = 64f
     }
 }
