@@ -124,7 +124,6 @@ object Utils {
             setCue(navigation.getCue())
             setLane(navigation.getLane())
             setType(navigation.getType())
-            setPercentTraveled(navigation.getPercentTraveled())
         }
         if (navigation.getStepDistance() >= 1000) {
             normalized.setStepDistance(convertMetersToKilometers(navigation.getStepDistance()))
@@ -143,8 +142,7 @@ object Utils {
         stepRoad: String?,
         stepDistanceRemaining: Double?,
         maneuverType: String?,
-        maneuverModifier: String?,
-        fractionTraveled: Double? = null
+        maneuverModifier: String?
     ): Navigation {
         navigation.setDistance(distanceRemaining)
         navigation.setDuration(durationRemaining)
@@ -160,9 +158,6 @@ object Utils {
                     getType("$maneuverType ${maneuverModifier.orEmpty()}".trim())
                 )
             )
-        }
-        if (fractionTraveled != null) {
-            navigation.setPercentTraveled(fractionTraveled)
         }
         // Lane data must come from the upcoming intersection. Do not send a
         // fixed lane shape when Mapbox has not supplied lane guidance.

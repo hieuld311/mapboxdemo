@@ -1,9 +1,7 @@
 package com.ivi.car.navigation.ui
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Base64
 import android.content.ComponentName
 import android.content.SharedPreferences
 import android.content.Context
@@ -53,7 +51,6 @@ import com.ivi.car.navigation.util.Utils
 import com.ivi.car.navigation.viewmodel.AudioViewModel
 import com.ivi.car.navigation.viewmodel.NaviViewModel
 import com.mapbox.android.gestures.MoveGestureDetector
-import com.mapbox.bindgen.Value
 import com.mapbox.common.location.toAndroidLocation
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
@@ -265,22 +262,6 @@ class NaviFragment : Fragment() {
             // update camera position to account for new location
             viewportDataSource.onLocationChanged(enhancedLocation)
             viewportDataSource.evaluate()
-
-            // Mirror puck position + current map camera to the launcher's live map widget (see
-            // NavigationManager.widgetLocationMatcherResult/widgetCamera, consumed by
-            // MapWidgetSurfaceService). This runs continuously (trip session is always active,
-            // see onAttached below) so the widget shows map + puck even when idle, matching
-            // NaviFragment's own puck/camera exactly - real GPS or simulated replay alike.
-            NavigationManager.updateWidgetLocationMatcherResult(locationMatcherResult)
-            val widgetCameraState = binding.mapView.mapboxMap.cameraState
-            NavigationManager.updateWidgetCamera(
-                NavigationManager.WidgetCameraSnapshot(
-                    center = widgetCameraState.center,
-                    zoom = widgetCameraState.zoom,
-                    bearing = widgetCameraState.bearing,
-                    pitch = widgetCameraState.pitch
-                )
-            )
             //update location when simulate
             if (isLocationConnected) {
                 mockLocationUpdateJob?.cancel()
@@ -357,17 +338,12 @@ class NaviFragment : Fragment() {
             stepRoad = stepRoad,
             stepDistanceRemaining = stepDistanceRemaining,
             maneuverType = maneuverType,
-            maneuverModifier = maneuverModifier,
-            fractionTraveled = routeProgress.fractionTraveled.toDouble()
+            maneuverModifier = maneuverModifier
         )
         NavigationManager.updateProgress(
             routeProgress.distanceRemaining.toDouble(),
             routeProgress.durationRemaining.toInt()
         )
-        // Drives the launcher widget's maneuver+trip-progress card (see
-        // MapWidgetSurfaceService.progressJob) - non-null here means "route active", which is
-        // exactly the card's visibility condition.
-        NavigationManager.updateWidgetRouteProgress(routeProgress)
         sendNaviData()
 
         // update bottom trip progress summary
@@ -439,9 +415,6 @@ class NaviFragment : Fragment() {
     }
 
     private val routesObserver = RoutesObserver { routeUpdateResult ->
-        // Mirror the raw route list to the widget regardless of branch below, so its route line
-        // clears the moment routes go empty instead of lagging behind the else-branch's own map.
-        NavigationManager.updateWidgetRoutes(routeUpdateResult.navigationRoutes)
         if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
             routeTotalDistanceMeters = null
             (activity as? MainActivity)?.ensureNavigationServiceRunning()
@@ -476,12 +449,6 @@ class NaviFragment : Fragment() {
             // remove the route reference from camera position evaluations
             viewportDataSource.clearRouteData()
             viewportDataSource.evaluate()
-
-            // Route gone - widget's maneuver/trip-progress card should hide (idle = map + puck
-            // only, see MapWidgetSurfaceService.progressJob). Do NOT clear
-            // widgetLocationMatcherResult/widgetCamera here: the puck and map position should
-            // stay exactly as they are at idle, not reset.
-            NavigationManager.updateWidgetRouteProgress(null)
         }
     }
 
@@ -1271,7 +1238,7 @@ class NaviFragment : Fragment() {
             MapStyleMode.LIGHT -> Style.LIGHT
             MapStyleMode.SATELLITE -> Style.SATELLITE
         }
-        loadMapStyle(styleUri, styleMode)
+        loadMapStyle(styleUri)
         if (persist) {
             SharePreferences.saveIntPreferences(
                 sharedPreferences.edit(),
@@ -1281,13 +1248,8 @@ class NaviFragment : Fragment() {
         }
     }
 
-    private fun loadMapStyle(styleUri: String, styleMode: MapStyleMode) {
+    private fun loadMapStyle(styleUri: String) {
         binding.mapView.mapboxMap.loadStyle(styleUri) { style ->
-            if (styleMode == MapStyleMode.STANDARD_3D) {
-                style.setStyleImportConfigProperty("basemap", "lightPreset", Value("dawn"))
-                style.setStyleImportConfigProperty("basemap", "theme", Value("faded"))
-            }
-
             routeLineView.initializeLayers(style)
             val currentRoutes = mapboxNavigation.getNavigationRoutes()
             if (currentRoutes.isNotEmpty()) {

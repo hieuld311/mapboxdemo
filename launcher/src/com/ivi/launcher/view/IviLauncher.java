@@ -32,7 +32,6 @@ import com.ivi.launcher.R;
 import com.ivi.launcher.constant.HomeCardItem;
 import com.ivi.launcher.view.adapter.HomeCarouselAdapter;
 import com.ivi.launcher.model.home.HomeCardDataRepository;
-import com.ivi.launcher.model.home.NavMapSurfaceCoordinator;
 
 import java.util.ArrayList;
 
@@ -866,12 +865,6 @@ public class IviLauncher extends AppCompatActivity implements HomeCarouselAdapte
             homeCardDataRepository.stop();
             homeCardDataRepository = null;
         }
-
-        // Releases the single process-wide map-widget surface session (see
-        // NavMapSurfaceCoordinator / HomeCardMapSurfaceController) so the nav app's
-        // MapWidgetSurfaceService tears down its MapView/SurfaceControlViewHost when the
-        // launcher activity goes away, instead of leaking it.
-        NavMapSurfaceCoordinator.getInstance(this).release();
 
         super.onDestroy();
     }

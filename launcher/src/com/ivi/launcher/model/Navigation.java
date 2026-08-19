@@ -35,10 +35,6 @@ public class Navigation {
     private String cue;
     private String lane;
     private String type;
-    // Overall route fraction traveled, 0.0-1.0. Same field name as the nav app's
-    // com.ivi.car.navigation.model.Navigation#percentTraveled - Gson matches by field name on
-    // both sides of the JSON channel (onNaviDataReceived), so the names must stay identical.
-    private double percentTraveled;
 
     // A default constructor is required by many deserialization libraries
     public Navigation() {}
@@ -80,9 +76,6 @@ public class Navigation {
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
 
-    public double getPercentTraveled() { return percentTraveled; }
-    public void setPercentTraveled(double percentTraveled) { this.percentTraveled = percentTraveled; }
-
     // An optional toString() method for easy printing and debugging
     @Override
     public String toString() {
@@ -99,7 +92,6 @@ public class Navigation {
                 ", cue='" + cue + '\'' +
                 ", lane='" + lane + '\'' +
                 ", type='" + type + '\'' +
-                ", percentTraveled=" + percentTraveled +
                 '}';
     }
 }

@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.RemoteCallbackList
 import android.os.RemoteException
-import android.util.Log
 import com.ivi.car.navigation.INaviListener
 import com.ivi.car.navigation.NaviAidlInterface
 import com.ivi.car.navigation.controller.NavigationManager
@@ -31,28 +30,17 @@ class NaviAidlService : Service() {
 
     private val binder = object : NaviAidlInterface.Stub() {
         override fun registerListener(listener: INaviListener) {
-            val registered = listeners.register(listener)
-            Log.i(
-                TAG,
-                "registerListener: registered=$registered callbacks=${listeners.registeredCallbackCount}"
-            )
+            listeners.register(listener)
             runCatching {
                 listener.onNavigationStateChanged(NavigationManager.getStateJson())
-            }.onFailure { error ->
-                Log.w(TAG, "Initial navigation-state callback failed", error)
             }
         }
 
         override fun unregisterListener(listener: INaviListener) {
-            val unregistered = listeners.unregister(listener)
-            Log.i(
-                TAG,
-                "unregisterListener: unregistered=$unregistered callbacks=${listeners.registeredCallbackCount}"
-            )
+            listeners.unregister(listener)
         }
 
         override fun sendNaviData(data: String) {
-            Log.d(TAG, "sendNaviData from bound client: length=${data.length}")
             broadcastNaviData(data)
         }
 
@@ -96,7 +84,6 @@ class NaviAidlService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "onCreate")
         serviceScope.launch {
             NavigationManager.state.collect { state ->
                 if (shouldBroadcast(state)) {
@@ -122,27 +109,16 @@ class NaviAidlService : Service() {
         }
         serviceScope.launch {
             LauncherTurnByTurnBus.updates.collect { payload ->
-                Log.d(TAG, "LauncherTurnByTurnBus update: length=${payload.length}")
                 broadcastNaviData(payload)
             }
         }
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        Log.i(TAG, "onBind: action=${intent?.action} component=${intent?.component}")
         return binder
     }
 
-    override fun onUnbind(intent: Intent?): Boolean {
-        Log.i(
-            TAG,
-            "onUnbind: action=${intent?.action} callbacks=${listeners.registeredCallbackCount}"
-        )
-        return false
-    }
-
     override fun onDestroy() {
-        Log.i(TAG, "onDestroy: callbacks=${listeners.registeredCallbackCount}")
         serviceScope.cancel()
         listeners.kill()
         super.onDestroy()
@@ -166,13 +142,12 @@ class NaviAidlService : Service() {
     private fun broadcastNaviData(data: String) {
         synchronized(listeners) {
             val count = listeners.beginBroadcast()
-            Log.d(TAG, "broadcastNaviData: listenerCount=$count length=${data.length}")
             try {
                 for (i in 0 until count) {
                     try {
                         listeners.getBroadcastItem(i).onNaviDataReceived(data)
                     } catch (e: RemoteException) {
-                        Log.w(TAG, "onNaviDataReceived callback failed for listener #$i", e)
+                        e.printStackTrace()
                     }
                 }
             } finally {
@@ -248,7 +223,6 @@ class NaviAidlService : Service() {
     }
 
     companion object {
-        private const val TAG = "NaviAidlService"
         private const val PROGRESS_BROADCAST_INTERVAL_MILLIS = 500L
     }
 }

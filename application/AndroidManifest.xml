@@ -75,14 +75,6 @@
             android:enabled="true"
             android:exported="true"
             android:foregroundServiceType="dataSync"/>
-        <service
-            android:name=".service.MapWidgetSurfaceService"
-            android:exported="true"
-            android:permission="android.permission.BIND_NAVI_AIDL">
-            <intent-filter>
-                <action android:name="com.ivi.car.navigation.service.MapWidgetSurfaceService" />
-            </intent-filter>
-        </service>
 
         <uses-library
             android:name="ivi.recognition"
