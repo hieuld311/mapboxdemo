@@ -19,8 +19,7 @@ interface IFAutoCarNavigation {
 
     String getNavigationState();
 
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // int setNavigationDemoMode(in int mode);
+    int setNavigationDemoMode(in int mode);
 
     int startNavigatingHome();
 }

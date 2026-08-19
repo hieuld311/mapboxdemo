@@ -438,6 +438,26 @@ object NavigationManager {
         return NavigationResultCode.ACCEPTED
     }
 
+    fun setNavigationDemoMode(modeCode: Int): Int {
+        val mode = NavigationDemoMode.fromCode(modeCode)
+            ?: return NavigationResultCode.INVALID_ARGUMENT
+        applicationContext
+            .getSharedPreferences(
+                Constant.KEY_SHARED_PREFERENCES,
+                Context.MODE_PRIVATE
+            )
+            .edit()
+            .putInt(Constant.DEMO_MODE, mode.code)
+            .apply()
+        updateState {
+            it.copy(
+                demoMode = mode,
+                message = "Navigation demo mode changed to ${mode.name}"
+            )
+        }
+        return NavigationResultCode.ACCEPTED
+    }
+
     fun markSimulationStarted() {
         updateState {
             it.copy(

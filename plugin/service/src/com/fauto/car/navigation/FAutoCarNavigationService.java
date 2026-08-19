@@ -69,8 +69,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     public static final int MSG_ON_GET_SEARCH_NEAR_BY = 0xA001;
     public static final int MSG_ON_SET_ROUTE = 0xA002;
     public static final int MSG_ON_SELECT_SUGGESTION = 0xA003;
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // public static final int MSG_ON_SET_NAVIGATION_DEMO_MODE = 0xA004;
+    public static final int MSG_ON_SET_NAVIGATION_DEMO_MODE = 0xA004;
     public static final int MSG_ON_START_NAVIGATING_HOME = 0xA005;
     private static final long COMMAND_RESULT_TIMEOUT_MILLIS = 5_000L;
 
@@ -78,6 +77,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private static final String API_SET_ROUTE = "setRoute";
     private static final String API_SELECT_SUGGESTION = "selectSuggestion";
     private static final String API_START_NAVIGATING_HOME = "startNavigatingHome";
+    private static final String API_SET_NAVIGATION_DEMO_MODE = "setNavigationDemoMode";
     private static final String API_GET_SEARCH_NEARBY_CATEGORY = "getSearchNearbyCategory";
     private static final String API_SEND_DATA_TURN_BY_TURN = "sendDataTurnByTurn";
     private static final String API_NAVIGATION_FALLBACK = "navigation";
@@ -111,6 +111,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private static final String STATUS_UNAVAILABLE = "UNAVAILABLE";
 
     private int mNavigationState = FAutoCarNavigationManager.NAVIGATION_STATE_IDLE;
+    private int mLastDemoMode = FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL;
 
     private String mLastDestination = "";
     private String mLastSuggestionId = "";
@@ -212,6 +213,12 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                     case MSG_ON_SELECT_SUGGESTION: {
                         CommandRequest request = (CommandRequest) msg.obj;
                         executeCommand(MSG_ON_SELECT_SUGGESTION, request);
+                        break;
+                    }
+
+                    case MSG_ON_SET_NAVIGATION_DEMO_MODE: {
+                        CommandRequest request = (CommandRequest) msg.obj;
+                        executeCommand(MSG_ON_SET_NAVIGATION_DEMO_MODE, request);
                         break;
                     }
 
@@ -580,8 +587,23 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         return navigationState;
     }
 
-    // NAV-005 out of scope: AI Agent does not set navigation demo mode.
-    // @Override public int setNavigationDemoMode(int mode) throws RemoteException { ... }
+    @Override
+    public int setNavigationDemoMode(int mode) throws RemoteException {
+        Log.i(LOG_TAG, "setNavigationDemoMode: " + mode);
+
+        if (!isValidDemoMode(mode)) {
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_VALUE_INVALID,
+                    "Invalid demo mode: " + mode,
+                    API_SET_NAVIGATION_DEMO_MODE));
+            return FAutoCarNavigationManager.ERROR_VALUE_INVALID;
+        }
+
+        return dispatchCommand(
+                MSG_ON_SET_NAVIGATION_DEMO_MODE,
+                CommandRequest.forInt(mode),
+                API_SET_NAVIGATION_DEMO_MODE);
+    }
 
     @Override
     public int startNavigatingHome() throws RemoteException {
@@ -632,6 +654,9 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 case MSG_ON_SELECT_SUGGESTION:
                     request.complete(handleSelectSuggestion(request.stringValue));
                     break;
+                case MSG_ON_SET_NAVIGATION_DEMO_MODE:
+                    request.complete(handleSetNavigationDemoMode(request.intValue));
+                    break;
                 case MSG_ON_START_NAVIGATING_HOME:
                     request.complete(handleStartNavigatingHome());
                     break;
@@ -659,6 +684,8 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 return API_SET_ROUTE;
             case MSG_ON_SELECT_SUGGESTION:
                 return API_SELECT_SUGGESTION;
+            case MSG_ON_SET_NAVIGATION_DEMO_MODE:
+                return API_SET_NAVIGATION_DEMO_MODE;
             case MSG_ON_START_NAVIGATING_HOME:
                 return API_START_NAVIGATING_HOME;
             default:
@@ -722,7 +749,27 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    // NAV-005 out of scope: no demo-mode command is forwarded to the navigation app.
+    private int handleSetNavigationDemoMode(int mode) {
+        NaviAidlInterface navigationApp = getNavigationAppService();
+        if (navigationApp == null) {
+            bindNavigationApp();
+            handleError(buildErrorJson(
+                    FAutoCarNavigationManager.ERROR_UNAVAILABLE,
+                    MESSAGE_APP_UNAVAILABLE,
+                    API_SET_NAVIGATION_DEMO_MODE));
+            return FAutoCarNavigationManager.ERROR_UNAVAILABLE;
+        }
+        try {
+            int appResult = navigationApp.setNavigationDemoMode(mode);
+            if (appResult != 0) {
+                handleAppCommandError(API_SET_NAVIGATION_DEMO_MODE, appResult);
+            }
+            return mapAppResultCode(appResult);
+        } catch (RemoteException error) {
+            handleAppRemoteException(API_SET_NAVIGATION_DEMO_MODE, error);
+            return FAutoCarNavigationManager.ERROR_REMOTE_EXCEPTION;
+        }
+    }
 
     private int handleStartNavigatingHome() {
         NaviAidlInterface navigationApp = getNavigationAppService();
@@ -952,6 +999,12 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
             String status = appState.optString("status", STATUS_UNAVAILABLE);
             int state = mapAppState(status);
             JSONObject destination = appState.optJSONObject(JSON_KEY_DESTINATION);
+            int demoMode = appState.optInt(
+                    "demoMode", FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL);
+            if (isValidDemoMode(demoMode) && demoMode != mLastDemoMode) {
+                mLastDemoMode = demoMode;
+                handleNavigationDemoModeChanged(demoMode);
+            }
 
             mNavigationState = state;
             if (destination != null) {
@@ -1182,7 +1235,16 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    // NAV-006 out of scope: demo-mode changes are delivered by AiSettingEventListener.
+    private void handleNavigationDemoModeChanged(int mode) {
+        try {
+            for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
+                    : getNavigationCallbacks()) {
+                cb.binderInterface.onNavigationDemoModeChanged(mode);
+            }
+        } catch (Exception e) {
+            Log.i(LOG_TAG, "Handle navigation demo mode changed exception: " + e);
+        }
+    }
 
     private void handleRouteChanged(String data) {
         try {
@@ -1248,7 +1310,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
         }
     }
 
-    // NAV-005/006 out of scope: demo-mode validation and display names removed.
+    private boolean isValidDemoMode(int mode) {
+        return mode == FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL
+                || mode == FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_TRAFFIC_JAM
+                || mode == FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_HIGHWAY;
+    }
 
     private boolean isValidSortBy(int sortedBy) {
         return sortedBy == FAutoCarNavigationManager.SORT_BY_DISTANCE

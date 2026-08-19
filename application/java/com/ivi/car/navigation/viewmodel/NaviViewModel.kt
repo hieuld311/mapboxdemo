@@ -308,7 +308,8 @@ class NaviViewModel @Inject constructor(
     @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
     private fun applyFixedSimulationSpeedIfNavigationReady() {
         if (!::mapboxNavigation.isInitialized) return
-        // NAV-005/006 are out of scope. Terrain/demo-mode speed changes stay disabled.
+        // NAV-005/006 (setNavigationDemoMode/onNavigationDemoModeChanged) are implemented as a
+        // state signal + AIDL event only; they intentionally do not drive replay speed here.
         mapboxNavigation.mapboxReplayer.playbackSpeed(1.0)
     }
 

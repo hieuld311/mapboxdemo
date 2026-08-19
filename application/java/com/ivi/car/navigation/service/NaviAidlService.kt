@@ -75,7 +75,9 @@ class NaviAidlService : Service() {
             return NavigationManager.getStateJson()
         }
 
-        // NAV-005 out of scope: AI Agent does not set navigation demo mode.
+        override fun setNavigationDemoMode(mode: Int): Int {
+            return NavigationManager.setNavigationDemoMode(mode)
+        }
 
         override fun startNavigatingHome(): Int {
             return NavigationManager.startNavigatingHome()

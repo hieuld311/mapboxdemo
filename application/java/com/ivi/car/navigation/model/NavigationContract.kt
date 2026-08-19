@@ -89,7 +89,8 @@ enum class MapStyleMode(val code: Int) {
 
 enum class NavigationDemoMode(val code: Int, val playbackSpeed: Double) {
     NORMAL(0, 1.0),
-    // Demo mode is out of scope
+    // playbackSpeed is a placeholder: setNavigationDemoMode (NAV-005/006) only changes this
+    // enum value/state field today, it does not affect Mapbox replay speed.
     TRAFFIC_JAM(1, 1.0),
     HIGHWAY(2, 1.0);
 

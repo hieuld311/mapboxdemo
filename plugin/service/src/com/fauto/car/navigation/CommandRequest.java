@@ -15,20 +15,26 @@ final class CommandRequest {
     }
 
     final String stringValue;
+    final int intValue;
     private final CountDownLatch completed = new CountDownLatch(1);
     volatile int resultCode = FAutoCarNavigationManager.ERROR_OPERATION_FAILED;
     private State state = State.PENDING;
 
-    private CommandRequest(String stringValue) {
+    private CommandRequest(String stringValue, int intValue) {
         this.stringValue = stringValue;
+        this.intValue = intValue;
     }
 
     static CommandRequest forString(String value) {
-        return new CommandRequest(value);
+        return new CommandRequest(value, 0);
+    }
+
+    static CommandRequest forInt(int value) {
+        return new CommandRequest(null, value);
     }
 
     static CommandRequest empty() {
-        return new CommandRequest(null);
+        return new CommandRequest(null, 0);
     }
 
     synchronized boolean tryStart() {

@@ -12,5 +12,6 @@ interface NaviAidlInterface {
     void searchNearBy(int category, int limit, int sortBy);
     int selectSuggestion(String suggestionId);
     String getNavigationState();
+    int setNavigationDemoMode(int mode);
     int startNavigatingHome();
 }
