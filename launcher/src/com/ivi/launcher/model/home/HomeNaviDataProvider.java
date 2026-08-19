@@ -141,9 +141,12 @@ public class HomeNaviDataProvider {
                 byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
                 Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                 if (bitmap == null) {
-                    Log.w(TAG, "handleMapSnapshot: decodeByteArray returned null");
+                    Log.w(TAG, "handleMapSnapshot: decodeByteArray returned null, base64Length="
+                            + base64.length());
                     return;
                 }
+                Log.d(TAG, "handleMapSnapshot: received " + bitmap.getWidth() + "x"
+                        + bitmap.getHeight() + " bitmap, base64Length=" + base64.length());
                 NaviInfo info = NaviInfo.snapshot(bitmap);
                 mMainHandler.post(() -> mListener.onNaviDataChanged(info));
             } catch (JSONException e) {

@@ -324,6 +324,8 @@ class NavigationService: Service() {
         snapshotter = Snapshotter(this, options).apply {
             setStyleUri(Style.STANDARD)
         }
+        Log.i(TAG, "startMapSnapshotLoop: started | size=${SNAPSHOT_WIDTH_DP}x$SNAPSHOT_HEIGHT_DP" +
+                "dp, intervalMs=$SNAPSHOT_INTERVAL_MS")
         snapshotJob = snapshotScope.launch {
             while (true) {
                 delay(SNAPSHOT_INTERVAL_MS)
@@ -340,8 +342,14 @@ class NavigationService: Service() {
     }
 
     private fun captureSnapshot() {
-        val location = latestSnapshotLocation ?: return
-        val activeSnapshotter = snapshotter ?: return
+        val location = latestSnapshotLocation ?: run {
+            Log.d(TAG, "captureSnapshot: skipped, no location yet")
+            return
+        }
+        val activeSnapshotter = snapshotter ?: run {
+            Log.d(TAG, "captureSnapshot: skipped, snapshotter not ready")
+            return
+        }
         val bearing = location.bearing ?: 0.0
         activeSnapshotter.setCamera(
             CameraOptions.Builder()
@@ -358,11 +366,22 @@ class NavigationService: Service() {
         // fixed center point for the puck (the camera is always centered on the puck itself).
         val routeGeometry = mapboxNavigation.getNavigationRoutes()
             .firstOrNull()?.directionsRoute?.geometry()
+        Log.d(TAG, "captureSnapshot: requesting | hasRoute=${routeGeometry != null}, " +
+                "bearing=$bearing, lat=${location.latitude}, lng=${location.longitude}")
         activeSnapshotter.start { snapshot: MapSnapshotInterface? ->
-            val rawBitmap = snapshot?.bitmap() ?: return@start
-            publishMapSnapshotToLauncher(
-                annotateSnapshot(rawBitmap, snapshot, routeGeometry, bearing)
-            )
+            if (snapshot == null) {
+                Log.w(TAG, "captureSnapshot: snapshot failed, MapSnapshotInterface is null")
+                return@start
+            }
+            val rawBitmap = snapshot.bitmap()
+            if (rawBitmap == null) {
+                Log.w(TAG, "captureSnapshot: snapshot failed, no bitmap returned")
+                return@start
+            }
+            val annotated = annotateSnapshot(rawBitmap, snapshot, routeGeometry, bearing)
+            Log.i(TAG, "captureSnapshot: captured ${annotated.width}x${annotated.height} bitmap, " +
+                    "publishing to launcher")
+            publishMapSnapshotToLauncher(annotated)
         }
     }
 
@@ -422,6 +441,7 @@ class NavigationService: Service() {
             .put("channel", "map-snapshot")
             .put("data", JSONObject().put("bitmap", base64))
             .toString()
+        Log.d(TAG, "publishMapSnapshotToLauncher: publishing | base64Length=${base64.length}")
         LauncherTurnByTurnBus.publish(payload)
     }
 

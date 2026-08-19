@@ -213,6 +213,8 @@ public class HomeCardDataRepository implements HomeMediaSessionProvider.Listener
             // A snapshot tick carries no TBT text data - only touch the map image so it
             // can't blank out whatever the TBT channel last set on this item.
             item.naviMapSnapshot = info.mapSnapshot;
+            Log.d(TAG, "onNaviDataChanged: map snapshot applied | hasBitmap="
+                    + (info.mapSnapshot != null));
             notifyChanged();
             return;
         }
