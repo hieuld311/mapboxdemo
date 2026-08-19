@@ -55,7 +55,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     // setImageBitmap()/visibility toggle is deferred there instead of done immediately here.
     private ImageView navFocusMapImage;
     private Bitmap pendingNavMapSnapshot;
-    private boolean pendingNavActive;
 
     public HomeCardViewHolder(
             @NonNull View itemView,
@@ -432,12 +431,14 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         navFocusMapImage = focusView.findViewById(R.id.navFocusMapImage);
         pendingNavMapSnapshot = item.naviMapSnapshot;
-        pendingNavActive = item.naviActive;
 
-        host.logFocus("bindNaviFocusCard | naviActive=" + item.naviActive
-                + ", hasSnapshot=" + (item.naviMapSnapshot != null));
+        host.logFocus("bindNaviFocusCard | hasSnapshot=" + (item.naviMapSnapshot != null));
 
-        if (!item.naviActive) {
+        // Governed purely by whether a snapshot exists, not item.naviActive (which is driven
+        // solely by the unrelated TBT text channel and can lag well behind the first snapshot,
+        // or stay stuck true after a trip completes) - see NavigationService.publishMapSnapshotCleared()
+        // for how naviMapSnapshot gets reset to null once the app stops capturing.
+        if (item.naviMapSnapshot == null) {
             if (defaultView != null) defaultView.setVisibility(View.VISIBLE);
             if (navFocusMapImage != null) navFocusMapImage.setVisibility(View.GONE);
             return;
@@ -511,10 +512,9 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         // nav map image actually gets shown: only once this card has fully become focused, never
         // mid-animation, so a fresh snapshot never "pops in" while the card is still growing.
         if (currentType == HomeCardItem.TYPE_NAVIGATION && navFocusMapImage != null) {
-            boolean showSnapshot = focused && pendingNavActive && pendingNavMapSnapshot != null;
+            boolean showSnapshot = focused && pendingNavMapSnapshot != null;
             host.logFocus("navFocusMapImage " + (showSnapshot ? "VISIBLE" : "GONE")
-                    + " | focused=" + focused + ", pendingNavActive=" + pendingNavActive
-                    + ", hasSnapshot=" + (pendingNavMapSnapshot != null));
+                    + " | focused=" + focused + ", hasSnapshot=" + (pendingNavMapSnapshot != null));
             if (showSnapshot) {
                 navFocusMapImage.setImageBitmap(pendingNavMapSnapshot);
                 navFocusMapImage.setVisibility(View.VISIBLE);

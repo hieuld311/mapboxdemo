@@ -81,6 +81,13 @@ public class HomeNaviDataProvider {
         public static NaviInfo snapshot(@NonNull Bitmap bitmap) {
             return new NaviInfo(false, "", "", "", "", "", "", "", 0, true, bitmap);
         }
+
+        // Published when the app stops the capture loop (trip completed/cancelled) - clears
+        // HomeCardItem.naviMapSnapshot so the focus card falls back to its idle view instead of
+        // being stuck showing the last frame of a finished route forever.
+        public static NaviInfo snapshotCleared() {
+            return new NaviInfo(false, "", "", "", "", "", "", "", 0, true, null);
+        }
     }
 
     private final Context mContext;
@@ -137,6 +144,12 @@ public class HomeNaviDataProvider {
             try {
                 JSONObject envelope = new JSONObject(jsonString);
                 JSONObject data = envelope.getJSONObject("data");
+                if (!data.optBoolean("active", true)) {
+                    Log.d(TAG, "handleMapSnapshot: navigation stopped, clearing snapshot");
+                    NaviInfo clearedInfo = NaviInfo.snapshotCleared();
+                    mMainHandler.post(() -> mListener.onNaviDataChanged(clearedInfo));
+                    return;
+                }
                 String base64 = data.getString("bitmap");
                 byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
                 Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);

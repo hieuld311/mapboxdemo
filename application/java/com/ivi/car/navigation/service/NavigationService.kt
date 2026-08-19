@@ -335,10 +335,26 @@ class NavigationService: Service() {
     }
 
     private fun stopMapSnapshotLoop() {
+        val wasRunning = snapshotJob != null
         snapshotJob?.cancel()
         snapshotJob = null
         snapshotter?.destroy()
         snapshotter = null
+        if (wasRunning) {
+            // Otherwise the launcher's focus card would keep showing the last captured
+            // route/puck frame forever after the trip ends, since no further snapshot ever
+            // arrives to replace it.
+            publishMapSnapshotCleared()
+        }
+    }
+
+    private fun publishMapSnapshotCleared() {
+        val payload = JSONObject()
+            .put("channel", "map-snapshot")
+            .put("data", JSONObject().put("active", false))
+            .toString()
+        Log.i(TAG, "publishMapSnapshotCleared: navigation stopped, clearing launcher snapshot")
+        LauncherTurnByTurnBus.publish(payload)
     }
 
     private fun captureSnapshot() {
@@ -439,7 +455,7 @@ class NavigationService: Service() {
         val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
         val payload = JSONObject()
             .put("channel", "map-snapshot")
-            .put("data", JSONObject().put("bitmap", base64))
+            .put("data", JSONObject().put("active", true).put("bitmap", base64))
             .toString()
         Log.d(TAG, "publishMapSnapshotToLauncher: publishing | base64Length=${base64.length}")
         LauncherTurnByTurnBus.publish(payload)
