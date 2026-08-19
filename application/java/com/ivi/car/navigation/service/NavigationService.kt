@@ -22,6 +22,7 @@ import com.google.gson.Gson
 import com.ivi.car.navigation.controller.NavigationManager
 import com.ivi.car.navigation.model.Navigation
 import com.ivi.car.navigation.ui.MainActivity
+import com.ivi.car.navigation.util.GeoUtils
 import com.ivi.car.navigation.util.Utils
 import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
@@ -76,6 +77,9 @@ class NavigationService: Service() {
     private var snapshotJob: Job? = null
     private var locationObserverRegistered = false
     private var latestSnapshotLocation: Location? = null
+    // Fraction (0.0-1.0) of the active route already driven, updated from routeProgressObserver
+    // - used to trim the drawn route line the same way NaviFragment's vanishing route line does.
+    private var latestRouteTraveledFraction = 0.0
     private val routeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#2F76F2")
         style = Paint.Style.STROKE
@@ -177,6 +181,14 @@ class NavigationService: Service() {
     private val routeProgressObserver = RouteProgressObserver { routeProgress ->
         // update the camera position to account for the progressed fragment of the route
         Log.i(TAG,"routeProgressObserver change ....")
+        // For the snapshot's vanishing-route trim - see annotateSnapshot()/trimTraveledPortion().
+        val totalRouteDistance =
+            routeProgress.distanceTraveled.toDouble() + routeProgress.distanceRemaining.toDouble()
+        latestRouteTraveledFraction = if (totalRouteDistance > 0.0) {
+            (routeProgress.distanceTraveled.toDouble() / totalRouteDistance).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
         val previousStepRoad = navigation.getStepRoad()
         val previousStepDistance = navigation.getStepDistance()
         val previousType = navigation.getType()
@@ -224,6 +236,7 @@ class NavigationService: Service() {
         }
 
         if (routeProgress.currentState == RouteProgressState.COMPLETE) {
+            latestRouteTraveledFraction = 0.0
             NavigationManager.stopNavigation()
             val destination = navigation.getDestination()
             navigation = Navigation().apply {
@@ -234,9 +247,11 @@ class NavigationService: Service() {
             if (!MainActivity.isRunning) {
                 sendNaviData()
             }
-            unregisterObserver()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            // Only the route-progress/TBT side stops here - location observer, the map-snapshot
+            // loop, and the service itself keep running so the launcher widget still gets a live
+            // map (no route line, just puck) while the app is open but no trip is active. Full
+            // teardown (stopForeground/stopSelf) only happens from onDestroy() now.
+            unregisterRouteProgressObserverOnly()
             return@RouteProgressObserver
         }
     }
@@ -313,6 +328,17 @@ class NavigationService: Service() {
             Log.i(TAG, "Đã hủy đăng ký observer và dừng Trip Session")
         }
         stopMapSnapshotLoop()
+    }
+
+    // Trip-completion cleanup only: unregisters just the route-progress/TBT observer, leaving
+    // the location observer and map-snapshot loop registered/running (re-registered on the next
+    // route via onStartCommand's routeObserverRegistered guard, same as today).
+    private fun unregisterRouteProgressObserverOnly() {
+        if (::mapboxNavigation.isInitialized && routeObserverRegistered) {
+            mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
+            routeObserverRegistered = false
+            Log.i(TAG, "Đã hủy đăng ký route progress observer sau khi trip hoàn thành")
+        }
     }
 
     private fun startMapSnapshotLoop() {
@@ -394,7 +420,7 @@ class NavigationService: Service() {
                 Log.w(TAG, "captureSnapshot: snapshot failed, no bitmap returned")
                 return@start
             }
-            val annotated = annotateSnapshot(rawBitmap, snapshot, routeGeometry, bearing)
+            val annotated = annotateSnapshot(rawBitmap, snapshot, routeGeometry)
             Log.i(TAG, "captureSnapshot: captured ${annotated.width}x${annotated.height} bitmap, " +
                     "publishing to launcher")
             publishMapSnapshotToLauncher(annotated)
@@ -404,17 +430,20 @@ class NavigationService: Service() {
     private fun annotateSnapshot(
         rawBitmap: Bitmap,
         snapshot: MapSnapshotInterface,
-        routeGeometry: String?,
-        puckBearing: Double
+        routeGeometry: String?
     ): Bitmap {
         val bitmap = rawBitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(bitmap)
 
         if (routeGeometry != null) {
-            val routePoints = PolylineUtils.decode(routeGeometry, ROUTE_GEOMETRY_PRECISION)
-            if (routePoints.size >= 2) {
+            val fullRoutePoints = PolylineUtils.decode(routeGeometry, ROUTE_GEOMETRY_PRECISION)
+            // Vanishing route line, matching NaviFragment's vanishingRouteLineEnabled behavior -
+            // only the not-yet-driven portion of the route is drawn.
+            val remainingPoints =
+                trimTraveledPortion(fullRoutePoints, latestRouteTraveledFraction)
+            if (remainingPoints.size >= 2) {
                 val path = Path()
-                routePoints.forEachIndexed { index, point ->
+                remainingPoints.forEachIndexed { index, point ->
                     val screen = snapshot.pixelForCoordinate(point)
                     if (index == 0) {
                         path.moveTo(screen.x.toFloat(), screen.y.toFloat())
@@ -428,17 +457,57 @@ class NavigationService: Service() {
 
         // The camera is always centered on latestSnapshotLocation, so the puck's screen
         // position is always the bitmap's exact center - no pixelForCoordinate lookup needed.
-        drawPuck(canvas, bitmap.width / 2f, bitmap.height / 2f, puckBearing)
+        drawPuck(canvas, bitmap.width / 2f, bitmap.height / 2f)
         return bitmap
     }
 
-    private fun drawPuck(canvas: Canvas, centerX: Float, centerY: Float, bearingDegrees: Double) {
+    // Walks the route polyline accumulating segment lengths (GeoUtils.haversineMeters, same
+    // helper used elsewhere in the app) until traveledFraction of the total route length is
+    // reached, then returns only the remainder - interpolating a start point exactly at the
+    // puck's current progress so the line begins right at the puck instead of at the nearest
+    // decoded vertex.
+    private fun trimTraveledPortion(routePoints: List<Point>, traveledFraction: Double): List<Point> {
+        if (traveledFraction <= 0.0 || routePoints.size < 2) return routePoints
+        val segmentLengths = DoubleArray(routePoints.size - 1)
+        var totalLength = 0.0
+        for (i in 0 until routePoints.size - 1) {
+            val length = GeoUtils.haversineMeters(routePoints[i], routePoints[i + 1])
+            segmentLengths[i] = length
+            totalLength += length
+        }
+        if (totalLength <= 0.0) return routePoints
+        val traveledLength = totalLength * traveledFraction.coerceIn(0.0, 1.0)
+        var accumulated = 0.0
+        for (i in segmentLengths.indices) {
+            val segmentEnd = accumulated + segmentLengths[i]
+            if (segmentEnd >= traveledLength) {
+                val segmentFraction = if (segmentLengths[i] > 0.0) {
+                    (traveledLength - accumulated) / segmentLengths[i]
+                } else {
+                    0.0
+                }
+                val start = routePoints[i]
+                val end = routePoints[i + 1]
+                val interpolated = Point.fromLngLat(
+                    start.longitude() + (end.longitude() - start.longitude()) * segmentFraction,
+                    start.latitude() + (end.latitude() - start.latitude()) * segmentFraction
+                )
+                return listOf(interpolated) + routePoints.subList(i + 1, routePoints.size)
+            }
+            accumulated = segmentEnd
+        }
+        return listOf(routePoints.last())
+    }
+
+    // The camera's own bearing is already set to the puck's course (see captureSnapshot()),
+    // matching NaviFragment's PuckBearing.COURSE + course-up following camera - so the puck icon
+    // itself always points straight up on screen and needs no additional rotation here. Rotating
+    // it again on top of that would double the turn.
+    private fun drawPuck(canvas: Canvas, centerX: Float, centerY: Float) {
         val puckDrawable = ContextCompat.getDrawable(
             this, com.mapbox.maps.R.drawable.mapbox_user_puck_icon
         ) ?: return
         val half = PUCK_SIZE_PX / 2f
-        canvas.save()
-        canvas.rotate(bearingDegrees.toFloat(), centerX, centerY)
         puckDrawable.setBounds(
             (centerX - half).toInt(),
             (centerY - half).toInt(),
@@ -446,7 +515,6 @@ class NavigationService: Service() {
             (centerY + half).toInt()
         )
         puckDrawable.draw(canvas)
-        canvas.restore()
     }
 
     private fun publishMapSnapshotToLauncher(bitmap: Bitmap) {
