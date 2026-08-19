@@ -54,6 +54,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     private static final String EXTRA_LIMIT = "limit";
     private static final String EXTRA_SORT_BY = "sort_by";
     private static final String EXTRA_SUGGESTION_ID = "suggestion_id";
+    private static final String EXTRA_MODE = "mode";
 
     private Context mContext;
     private HandlerThread mHandlerThread;
@@ -348,6 +349,11 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
                 case "select_suggestion":
                     Log.i(LOG_TAG, "DEBUG select_suggestion result="
                             + selectSuggestion(intent.getStringExtra(EXTRA_SUGGESTION_ID)));
+                    break;
+                case "demo_mode":
+                    Log.i(LOG_TAG, "DEBUG demo_mode result="
+                            + setNavigationDemoMode(intent.getIntExtra(
+                                    EXTRA_MODE, FAutoCarNavigationManager.NAVIGATION_DEMO_MODE_NORMAL)));
                     break;
                 case "home":
                     Log.i(LOG_TAG, "DEBUG home result=" + startNavigatingHome());
@@ -1236,6 +1242,7 @@ public class FAutoCarNavigationService extends IFAutoCarNavigation.Stub
     }
 
     private void handleNavigationDemoModeChanged(int mode) {
+        Log.i(LOG_TAG, "onNavigationDemoModeChanged: mode=" + mode);
         try {
             for (BinderInterfaceContainer.BinderInterface<IFautoCarNavigationEventListener> cb
                     : getNavigationCallbacks()) {
