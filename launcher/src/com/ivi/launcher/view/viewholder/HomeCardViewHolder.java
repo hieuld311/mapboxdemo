@@ -49,12 +49,11 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
     private ValueAnimator runningAnimator;
     private int currentType = -1;
     private int boundAdapterPosition = RecyclerView.NO_POSITION;
-    // Nav focus card's map image + the bitmap waiting to be shown on it. Set in
-    // bindNaviFocusCard() (called from bindCardData(), before the focus-state animation
-    // decision), consumed in applyFocusState() - see that method for why the actual
-    // setImageBitmap()/visibility toggle is deferred there instead of done immediately here.
+    // Nav focus card's map image. Set in bindNaviFocusCard() (called from bindCardData(), before
+    // any focus-state animation decision) - same timing as bindMediaCardView()'s artwork image,
+    // so it's already in place before the swipe-in animation starts and just scales along with
+    // the rest of focusSlot's content, instead of popping in only once focused.
     private ImageView navFocusMapImage;
-    private Bitmap pendingNavMapSnapshot;
 
     public HomeCardViewHolder(
             @NonNull View itemView,
@@ -430,7 +429,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
 
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         navFocusMapImage = focusView.findViewById(R.id.navFocusMapImage);
-        pendingNavMapSnapshot = item.naviMapSnapshot;
 
         host.logFocus("bindNaviFocusCard | hasSnapshot=" + (item.naviMapSnapshot != null));
 
@@ -445,9 +443,13 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         }
 
         if (defaultView != null) defaultView.setVisibility(View.GONE);
-        // navFocusMapImage's bitmap/visibility is applied from applyFocusState(), not here -
-        // see that method's doc for why showing it is deferred until the focus state (and any
-        // grow animation) has actually settled.
+        if (navFocusMapImage != null) {
+            // Set here, same as bindMediaCardView()'s artwork - the image is already in place
+            // before any swipe/grow animation starts, so it scales along with focusSlot's
+            // transform instead of popping in only once the card finishes becoming focused.
+            navFocusMapImage.setImageBitmap(item.naviMapSnapshot);
+            navFocusMapImage.setVisibility(View.VISIBLE);
+        }
     }
 
     private String formatDistanceUnit(String unit) {
@@ -505,22 +507,6 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             compactSlot.setAlpha(1f);
             compactShadowImage.setVisibility(View.VISIBLE);
             compactShadowImage.setAlpha(1f);
-        }
-        // Every path that changes focus state - instant bind, or a completed grow/collapse
-        // animation (see animateFocusState()/animateUnfocusState(), both of which call back into
-        // this method once settled) - funnels through here. This is the single point where the
-        // nav map image actually gets shown: only once this card has fully become focused, never
-        // mid-animation, so a fresh snapshot never "pops in" while the card is still growing.
-        if (currentType == HomeCardItem.TYPE_NAVIGATION && navFocusMapImage != null) {
-            boolean showSnapshot = focused && pendingNavMapSnapshot != null;
-            host.logFocus("navFocusMapImage " + (showSnapshot ? "VISIBLE" : "GONE")
-                    + " | focused=" + focused + ", hasSnapshot=" + (pendingNavMapSnapshot != null));
-            if (showSnapshot) {
-                navFocusMapImage.setImageBitmap(pendingNavMapSnapshot);
-                navFocusMapImage.setVisibility(View.VISIBLE);
-            } else {
-                navFocusMapImage.setVisibility(View.GONE);
-            }
         }
     }
 
