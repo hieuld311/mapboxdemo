@@ -347,9 +347,11 @@ class NaviFragment : Fragment() {
         sendNaviData()
 
         // update bottom trip progress summary
-        binding.tripProgressView.render(
-            tripProgressApi.getTripProgress(routeProgress)
-        )
+        val tripProgress = tripProgressApi.getTripProgress(routeProgress)
+        Log.d(TAG, "tripProgressView.render: distanceRemaining=${tripProgress.distanceRemaining}, " +
+                "percentDistanceTraveled=${tripProgress.percentRouteTraveled}, " +
+                "totalTimeRemaining=${tripProgress.totalTimeRemaining}")
+        binding.tripProgressView.render(tripProgress)
         updateBottomNavigationCard(routeProgress)
         viewportDataSource.onRouteProgressChanged(routeProgress)
         viewportDataSource.evaluate()
@@ -470,8 +472,12 @@ class NaviFragment : Fragment() {
             // back to real-location mode, resetting route progress/ETA to the real (off-route)
             // device position every time this fragment re-attaches - e.g. app backgrounded then
             // reopened mid-simulation. Skip it while a simulation is already in progress.
-            if (NavigationManager.state.value.status != NavigationStatus.SIMULATING_DRIVE) {
+            val status = NavigationManager.state.value.status
+            if (status != NavigationStatus.SIMULATING_DRIVE) {
+                Log.i(TAG, "onAttached: starting trip session, status=$status")
                 mapboxNavigation.startTripSession()
+            } else {
+                Log.i(TAG, "onAttached: skipped startTripSession, already SIMULATING_DRIVE")
             }
         }
 
