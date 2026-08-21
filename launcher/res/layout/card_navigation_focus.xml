@@ -21,6 +21,64 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- Maneuver overlay: turn icon + distance + road, drawn over the map image while a route
+         is active. Banner at the top so it doesn't cover the puck at the image's center. GONE
+         whenever there's no active route (idle, or map-only with no TBT data yet). -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/navFocusManeuverView"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:background="#99050816"
+        android:paddingHorizontal="20dp"
+        android:paddingVertical="16dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:id="@+id/navFocusManeuverIcon"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:scaleType="centerInside"
+            android:importantForAccessibility="no"
+            android:background="@drawable/bg_navi_turn_icon"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent" />
+
+        <TextView
+            android:id="@+id/navFocusManeuverDistance"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:textColor="#00F9EC"
+            android:textSize="24sp"
+            android:fontFamily="@font/jetbrainsmono_bold"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            app:layout_constraintTop_toTopOf="@id/navFocusManeuverIcon"
+            app:layout_constraintStart_toEndOf="@id/navFocusManeuverIcon"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <TextView
+            android:id="@+id/navFocusManeuverRoad"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="2dp"
+            android:textColor="#D1FFFD"
+            android:textSize="14sp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            app:layout_constraintTop_toBottomOf="@id/navFocusManeuverDistance"
+            app:layout_constraintStart_toEndOf="@id/navFocusManeuverIcon"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintBottom_toBottomOf="@id/navFocusManeuverIcon" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
     <!-- Default state: shown when navigation is not active -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/navFocusDefaultView"

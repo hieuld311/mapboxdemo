@@ -15,6 +15,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.ivi.launcher.R;
@@ -430,7 +431,8 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         View defaultView = focusView.findViewById(R.id.navFocusDefaultView);
         navFocusMapImage = focusView.findViewById(R.id.navFocusMapImage);
 
-        host.logFocus("bindNaviFocusCard | hasSnapshot=" + (item.naviMapSnapshot != null));
+        host.logFocus("bindNaviFocusCard | hasSnapshot=" + (item.naviMapSnapshot != null)
+                + ", naviActive=" + item.naviActive);
 
         // Governed purely by whether a snapshot exists, not item.naviActive (which is driven
         // solely by the unrelated TBT text channel and can lag well behind the first snapshot,
@@ -439,6 +441,7 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (item.naviMapSnapshot == null) {
             if (defaultView != null) defaultView.setVisibility(View.VISIBLE);
             if (navFocusMapImage != null) navFocusMapImage.setVisibility(View.GONE);
+            bindNaviFocusManeuver(focusView, null);
             return;
         }
 
@@ -449,6 +452,39 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             // transform instead of popping in only once the card finishes becoming focused.
             navFocusMapImage.setImageBitmap(item.naviMapSnapshot);
             navFocusMapImage.setVisibility(View.VISIBLE);
+        }
+        // Maneuver banner is a separate signal from the image itself: only shown while a route
+        // is actually active (item.naviActive, same TBT-driven flag the compact card uses),
+        // never gating the map image underneath it.
+        bindNaviFocusManeuver(focusView, item.naviActive ? item : null);
+    }
+
+    /** Turn icon + distance + road banner drawn over navFocusMapImage; null item hides it. */
+    private void bindNaviFocusManeuver(@NonNull View focusView, @Nullable HomeCardItem item) {
+        View maneuverView = focusView.findViewById(R.id.navFocusManeuverView);
+        if (maneuverView == null) return;
+
+        if (item == null) {
+            maneuverView.setVisibility(View.GONE);
+            return;
+        }
+
+        maneuverView.setVisibility(View.VISIBLE);
+        ImageView turnIcon = maneuverView.findViewById(R.id.navFocusManeuverIcon);
+        TextView distanceView = maneuverView.findViewById(R.id.navFocusManeuverDistance);
+        TextView roadView = maneuverView.findViewById(R.id.navFocusManeuverRoad);
+
+        if (turnIcon != null) {
+            int iconRes = getTurnIconRes(item.naviTurnType);
+            turnIcon.setImageResource(
+                    iconRes != 0 ? iconRes : R.drawable.ico_launcher_turn_by_turn_unknown_s);
+        }
+        if (distanceView != null) {
+            String unit = formatDistanceUnit(item.naviStepUnit);
+            distanceView.setText(item.naviStepDistance + " " + unit);
+        }
+        if (roadView != null) {
+            roadView.setText(isEmpty(item.naviStepRoad) ? item.naviDestination : item.naviStepRoad);
         }
     }
 
