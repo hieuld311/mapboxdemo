@@ -441,7 +441,7 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
         if (item.naviMapSnapshot == null) {
             if (defaultView != null) defaultView.setVisibility(View.VISIBLE);
             if (navFocusMapImage != null) navFocusMapImage.setVisibility(View.GONE);
-            bindNaviFocusManeuver(focusView, null);
+            bindNaviFocusTbt(focusView, null);
             return;
         }
 
@@ -453,38 +453,68 @@ public class HomeCardViewHolder extends RecyclerView.ViewHolder {
             navFocusMapImage.setImageBitmap(item.naviMapSnapshot);
             navFocusMapImage.setVisibility(View.VISIBLE);
         }
-        // Maneuver banner is a separate signal from the image itself: only shown while a route
-        // is actually active (item.naviActive, same TBT-driven flag the compact card uses),
-        // never gating the map image underneath it.
-        bindNaviFocusManeuver(focusView, item.naviActive ? item : null);
+        // TBT panel is a separate signal from the image itself: shown while a route is active
+        // (item.naviActive, same TBT-driven flag the compact card uses) but hidden again once
+        // the trip has actually arrived (type=="DESTINATION" - naviActive alone never flips back
+        // to false on arrival, see publishTurnByTurnToLauncher(arrived=true) on the app side).
+        // Never gates the map image underneath it.
+        boolean showTbt = item.naviActive && !"DESTINATION".equals(item.naviTurnType);
+        bindNaviFocusTbt(focusView, showTbt ? item : null);
     }
 
-    /** Turn icon + distance + road banner drawn over navFocusMapImage; null item hides it. */
-    private void bindNaviFocusManeuver(@NonNull View focusView, @Nullable HomeCardItem item) {
-        View maneuverView = focusView.findViewById(R.id.navFocusManeuverView);
-        if (maneuverView == null) return;
+    /** Turn icon + instruction + distance + road + destination over navFocusMapImage; null item hides it. */
+    private void bindNaviFocusTbt(@NonNull View focusView, @Nullable HomeCardItem item) {
+        View tbtView = focusView.findViewById(R.id.navFocusTbtView);
+        if (tbtView == null) return;
 
         if (item == null) {
-            maneuverView.setVisibility(View.GONE);
+            tbtView.setVisibility(View.GONE);
             return;
         }
 
-        maneuverView.setVisibility(View.VISIBLE);
-        ImageView turnIcon = maneuverView.findViewById(R.id.navFocusManeuverIcon);
-        TextView distanceView = maneuverView.findViewById(R.id.navFocusManeuverDistance);
-        TextView roadView = maneuverView.findViewById(R.id.navFocusManeuverRoad);
+        tbtView.setVisibility(View.VISIBLE);
+        ImageView turnIcon = tbtView.findViewById(R.id.navFocusTurnIcon);
+        TextView directionView = tbtView.findViewById(R.id.navFocusDirection);
+        TextView distanceView = tbtView.findViewById(R.id.navFocusDistance);
+        TextView roadView = tbtView.findViewById(R.id.navFocusRoad);
+        TextView destinationView = tbtView.findViewById(R.id.navFocusDestination);
 
         if (turnIcon != null) {
             int iconRes = getTurnIconRes(item.naviTurnType);
             turnIcon.setImageResource(
                     iconRes != 0 ? iconRes : R.drawable.ico_launcher_turn_by_turn_unknown_s);
         }
+        if (directionView != null) {
+            directionView.setText(formatTurnType(item.naviTurnType));
+        }
         if (distanceView != null) {
             String unit = formatDistanceUnit(item.naviStepUnit);
             distanceView.setText(item.naviStepDistance + " " + unit);
         }
         if (roadView != null) {
-            roadView.setText(isEmpty(item.naviStepRoad) ? item.naviDestination : item.naviStepRoad);
+            roadView.setText(item.naviStepRoad);
+        }
+        if (destinationView != null) {
+            destinationView.setText(item.naviDestination);
+            destinationView.setVisibility(isEmpty(item.naviDestination) ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    private String formatTurnType(String turnType) {
+        if (turnType == null) return "Continue";
+        switch (turnType) {
+            case "TURN_NORMAL_RIGHT": return "Turn right";
+            case "TURN_NORMAL_LEFT":  return "Turn left";
+            case "TURN_SHARP_RIGHT":  return "Sharp right";
+            case "TURN_SHARP_LEFT":   return "Sharp left";
+            case "TURN_SLIGHT_RIGHT": return "Slight right";
+            case "TURN_SLIGHT_LEFT":  return "Slight left";
+            case "U_TURN_RIGHT":      return "U-turn right";
+            case "U_TURN_LEFT":       return "U-turn left";
+            case "U_TURN":            return "U-turn";
+            case "ROUNDABOUT_ENTER":  return "Roundabout";
+            case "DESTINATION":       return "Arrived";
+            default:                  return "Continue";
         }
     }
 
