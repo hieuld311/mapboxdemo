@@ -188,6 +188,11 @@ class NaviFragment : Fragment() {
 
     private var navigation: Navigation = Navigation()
     private var routeTotalDistanceMeters: Double? = null
+    // Tracks the current primary route's id so routesObserver can tell a genuinely new route
+    // apart from the SDK replaying the unchanged current route to a freshly re-registered
+    // observer (see routesObserver) - see routeTotalDistanceMeters usage in
+    // updateBottomNavigationCard() for why that distinction matters.
+    private var lastPrimaryRouteId: String? = null
     private var appliedMapStyle: MapStyleMode? = null
     private var lastObservedStatus: NavigationStatus? = null
 
@@ -395,6 +400,7 @@ class NaviFragment : Fragment() {
 
     private fun stopSimulationInvoke() {
         routeTotalDistanceMeters = null
+        lastPrimaryRouteId = null
         naviViewModel.clearNavigationRoutes()
         navigation = Navigation()
         sendNaviData()
@@ -418,9 +424,18 @@ class NaviFragment : Fragment() {
 
     private val routesObserver = RoutesObserver { routeUpdateResult ->
         if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
-            routeTotalDistanceMeters = null
-            (activity as? MainActivity)?.ensureNavigationServiceRunning()
             val primaryRoute = routeUpdateResult.navigationRoutes.first()
+            // registerRoutesObserver() replays the current routes to a freshly-registered
+            // observer, so this fires again on every onAttached (e.g. app backgrounded then
+            // reopened) even when the route hasn't actually changed. Only clear the cached
+            // total-distance baseline when it's genuinely a new route - otherwise
+            // updateBottomNavigationCard() re-seeds it from whatever distance happens to be
+            // remaining at that moment, making routeProgressIndicator jump back to 0%.
+            if (primaryRoute.id != lastPrimaryRouteId) {
+                lastPrimaryRouteId = primaryRoute.id
+                routeTotalDistanceMeters = null
+            }
+            (activity as? MainActivity)?.ensureNavigationServiceRunning()
             routeLineApi.setNavigationRoutes(
                 routeUpdateResult.navigationRoutes
             ) { value ->
@@ -437,6 +452,7 @@ class NaviFragment : Fragment() {
                 binding.tripProgressCard.visibility = View.VISIBLE
             }
         } else {
+            lastPrimaryRouteId = null
             // remove the route line and route arrow from the map
             val style = binding.mapView.mapboxMap.style
             if (style != null) {
