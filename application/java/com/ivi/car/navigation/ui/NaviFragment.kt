@@ -465,7 +465,14 @@ class NaviFragment : Fragment() {
             mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver)
             replayProgressObserver = ReplayProgressObserver(mapboxNavigation.mapboxReplayer)
             mapboxNavigation.registerRouteProgressObserver(replayProgressObserver)
-            mapboxNavigation.startTripSession()
+            // startTripSession() (real GPS) would silently switch an already-running replay
+            // session (started via startReplayTripSession() in NaviViewModel.startSimulation())
+            // back to real-location mode, resetting route progress/ETA to the real (off-route)
+            // device position every time this fragment re-attaches - e.g. app backgrounded then
+            // reopened mid-simulation. Skip it while a simulation is already in progress.
+            if (NavigationManager.state.value.status != NavigationStatus.SIMULATING_DRIVE) {
+                mapboxNavigation.startTripSession()
+            }
         }
 
         override fun onDetached(mapboxNavigation: MapboxNavigation) {
