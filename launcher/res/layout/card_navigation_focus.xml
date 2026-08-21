@@ -37,12 +37,13 @@
         app:layout_constraintEnd_toEndOf="parent">
 
         <!-- Cyan panel wrapping just the maneuver content, sized to it (wrap_content height)
-             rather than stretching the tint across the whole card behind it. -->
+             rather than stretching the tint across the whole card behind it. Inline color, no
+             separate drawable resource. -->
         <androidx.constraintlayout.widget.ConstraintLayout
             android:id="@+id/navFocusTbtPanel"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:background="@drawable/bg_navi_tbt_panel"
+            android:background="#4D00F9EC"
             android:padding="16dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"
