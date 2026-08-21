@@ -36,69 +36,84 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <ImageView
-            android:id="@+id/navFocusTurnIcon"
-            android:layout_width="80dp"
-            android:layout_height="80dp"
-            android:scaleType="centerInside"
-            android:importantForAccessibility="no"
+        <!-- Cyan panel wrapping just the maneuver content, sized to it (wrap_content height)
+             rather than stretching the tint across the whole card behind it. -->
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:id="@+id/navFocusTbtPanel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_navi_tbt_panel"
+            android:padding="16dp"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toStartOf="parent" />
-
-        <TextView
-            android:id="@+id/navFocusDirection"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:textColor="#D1FFFD"
-            android:textSize="16sp"
-            android:includeFontPadding="false"
-            app:layout_constraintTop_toTopOf="@id/navFocusTurnIcon"
-            app:layout_constraintStart_toEndOf="@id/navFocusTurnIcon"
-            app:layout_constraintEnd_toEndOf="parent" />
-
-        <TextView
-            android:id="@+id/navFocusDistance"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:textColor="#D1FFFD"
-            android:textSize="36sp"
-            android:fontFamily="@font/jetbrainsmono_bold"
-            android:includeFontPadding="false"
-            app:layout_constraintTop_toBottomOf="@id/navFocusDirection"
-            app:layout_constraintStart_toEndOf="@id/navFocusTurnIcon"
-            app:layout_constraintEnd_toEndOf="parent" />
-
-        <TextView
-            android:id="@+id/navFocusRoad"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textColor="#D1FFFD"
-            android:textSize="14sp"
-            android:ellipsize="end"
-            android:maxLines="2"
-            android:includeFontPadding="false"
-            app:layout_constraintTop_toBottomOf="@id/navFocusTurnIcon"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            app:layout_constraintEnd_toEndOf="parent">
 
-        <TextView
-            android:id="@+id/navFocusDestination"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textColor="#D1FFFD"
-            android:textSize="12sp"
-            android:alpha="0.7"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:includeFontPadding="false"
-            android:visibility="gone"
-            app:layout_constraintTop_toBottomOf="@id/navFocusRoad"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            <ImageView
+                android:id="@+id/navFocusTurnIcon"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:scaleType="centerInside"
+                android:importantForAccessibility="no"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintStart_toStartOf="parent" />
+
+            <TextView
+                android:id="@+id/navFocusDirection"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:textColor="#D1FFFD"
+                android:textSize="16sp"
+                android:includeFontPadding="false"
+                app:layout_constraintTop_toTopOf="@id/navFocusTurnIcon"
+                app:layout_constraintStart_toEndOf="@id/navFocusTurnIcon"
+                app:layout_constraintEnd_toEndOf="parent" />
+
+            <TextView
+                android:id="@+id/navFocusDistance"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:textColor="#D1FFFD"
+                android:textSize="36sp"
+                android:fontFamily="@font/jetbrainsmono_bold"
+                android:includeFontPadding="false"
+                app:layout_constraintTop_toBottomOf="@id/navFocusDirection"
+                app:layout_constraintStart_toEndOf="@id/navFocusTurnIcon"
+                app:layout_constraintEnd_toEndOf="parent" />
+
+            <TextView
+                android:id="@+id/navFocusRoad"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="#D1FFFD"
+                android:textSize="14sp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:includeFontPadding="false"
+                app:layout_constraintTop_toBottomOf="@id/navFocusTurnIcon"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent" />
+
+            <TextView
+                android:id="@+id/navFocusDestination"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="#D1FFFD"
+                android:textSize="12sp"
+                android:alpha="0.7"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:includeFontPadding="false"
+                android:visibility="gone"
+                app:layout_constraintTop_toBottomOf="@id/navFocusRoad"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent" />
+
+        </androidx.constraintlayout.widget.ConstraintLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
