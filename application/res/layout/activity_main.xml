@@ -6,6 +6,17 @@
     android:layout_height="match_parent"
     tools:context=".ui.MainActivity">
 
+    <!-- Looping, muted background video (see MainActivity.setupBackgroundVideo()). Bottom-most
+         layer - drop the actual file at res/raw/phud_dashboard_3840x208.mp4. -->
+    <VideoView
+        android:id="@+id/backgroundVideoView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
     <androidx.fragment.app.FragmentContainerView
         android:id="@+id/navi_fragment"
         android:layout_width="match_parent"

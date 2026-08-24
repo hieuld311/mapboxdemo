@@ -2,6 +2,7 @@ package com.ivi.car.navigation.ui
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -32,6 +33,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        setupBackgroundVideo()
         lifecycleScope.launch(Dispatchers.IO) {
             Utils.copyNavigationAssets(this@MainActivity)
             withContext(Dispatchers.Main) {
@@ -65,6 +67,28 @@ class MainActivity : AppCompatActivity() {
         if (navigationAssetsReady) {
             addNaviFragment()
         }
+        if (binding.backgroundVideoView.isPlaying.not()) {
+            binding.backgroundVideoView.start()
+        }
+    }
+
+    /** Looping, muted background video - drop the file at res/raw/phud_dashboard_3840x208.mp4. */
+    private fun setupBackgroundVideo() {
+        val videoView = binding.backgroundVideoView
+        videoView.setVideoURI(
+            Uri.parse("android.resource://$packageName/${R.raw.phud_dashboard_3840x208}")
+        )
+        videoView.setOnPreparedListener { player ->
+            player.isLooping = true
+            player.setVolume(0f, 0f)
+        }
+        videoView.setOnErrorListener { _, what, extra ->
+            android.util.Log.w(
+                "MainActivity",
+                "Background video playback error: what=$what, extra=$extra"
+            )
+            true
+        }
     }
 
     private fun addNaviFragment() {
@@ -79,6 +103,7 @@ class MainActivity : AppCompatActivity() {
         activityResumed = false
         super.onPause()
         requestShowHideInfoCenter(NavConstant.SHOW_INFO_CENTER)
+        binding.backgroundVideoView.pause()
     }
 
     override fun onStop() {
