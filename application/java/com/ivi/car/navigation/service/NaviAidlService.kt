@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.RemoteCallbackList
 import android.os.RemoteException
+import android.util.Log
 import com.ivi.car.navigation.INaviListener
 import com.ivi.car.navigation.NaviAidlInterface
 import com.ivi.car.navigation.controller.NavigationManager
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class NaviAidlService : Service() {
+    companion object {
+        private const val TAG = "NaviAidlService"
+    }
+
     private val listeners = RemoteCallbackList<INaviListener>()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var lastBroadcastState: NavigationState? = null
@@ -31,6 +36,7 @@ class NaviAidlService : Service() {
     private val binder = object : NaviAidlInterface.Stub() {
         override fun registerListener(listener: INaviListener) {
             listeners.register(listener)
+            Log.i(TAG, "registerListener: total listeners = ${listeners.registeredCallbackCount}")
             runCatching {
                 listener.onNavigationStateChanged(NavigationManager.getStateJson())
             }
@@ -38,6 +44,7 @@ class NaviAidlService : Service() {
 
         override fun unregisterListener(listener: INaviListener) {
             listeners.unregister(listener)
+            Log.i(TAG, "unregisterListener: total listeners = ${listeners.registeredCallbackCount}")
         }
 
         override fun sendNaviData(data: String) {
@@ -111,6 +118,7 @@ class NaviAidlService : Service() {
         }
         serviceScope.launch {
             LauncherTurnByTurnBus.updates.collect { payload ->
+                Log.i(TAG, "LauncherTurnByTurnBus payload received: $payload")
                 broadcastNaviData(payload)
             }
         }
@@ -144,12 +152,13 @@ class NaviAidlService : Service() {
     private fun broadcastNaviData(data: String) {
         synchronized(listeners) {
             val count = listeners.beginBroadcast()
+            Log.i(TAG, "broadcastNaviData: broadcasting to $count listener(s)")
             try {
                 for (i in 0 until count) {
                     try {
                         listeners.getBroadcastItem(i).onNaviDataReceived(data)
                     } catch (e: RemoteException) {
-                        e.printStackTrace()
+                        Log.w(TAG, "broadcastNaviData: listener $i failed", e)
                     }
                 }
             } finally {

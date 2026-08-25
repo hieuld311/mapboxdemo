@@ -209,6 +209,7 @@ class NavigationService: Service() {
             }
             maneuverList
         })
+        NavigationManager.state.value.destination?.name?.let { navigation.setDestination(it) }
         Utils.updateNavigation(
             navigation = navigation,
             distanceRemaining = routeProgress.distanceRemaining.toDouble(),
